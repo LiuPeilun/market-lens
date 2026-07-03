@@ -1,0 +1,13 @@
+.venv/
+.data/
+.tmp/
+.uv-cache/
+.pnpm-cache/
+.pnpm-store/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+_tmp_*
+.npmrc.*
