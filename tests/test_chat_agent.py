@@ -62,6 +62,11 @@ class FakeLLMClient:
         assert messages
         return "LLM 生成的自然语言回答"
 
+    def stream_complete(self, messages: list[dict[str, str]]):
+        assert messages
+        yield "流式"
+        yield "回答"
+
 
 def test_extract_asset_keyword_from_question() -> None:
     assert extract_asset_keyword("帮我看看南方红利低波现在贵不贵") == "南方红利低波"
@@ -122,3 +127,27 @@ def test_chat_agent_can_use_llm_answer() -> None:
     )
 
     assert result["answer"] == "LLM 生成的自然语言回答"
+
+
+def test_chat_agent_streams_llm_answer() -> None:
+    agent = ChatAgent(
+        data_client=FakeDataClient(),
+        analysis_agent=FakeAnalysisAgent(),
+        llm_client=FakeLLMClient(),
+        use_llm=True,
+    )
+
+    events = list(
+        agent.stream_reply(
+            message="南方红利低波贵不贵",
+            context=None,
+            start=date(2018, 1, 1),
+            end=date(2026, 7, 3),
+        )
+    )
+
+    assert events[0]["type"] == "meta"
+    assert events[0]["asset"]["code"] == "515450"
+    assert events[1] == {"type": "token", "delta": "流式"}
+    assert events[2] == {"type": "token", "delta": "回答"}
+    assert events[-1] == {"type": "done"}

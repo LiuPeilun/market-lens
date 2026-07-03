@@ -26,12 +26,12 @@ import {
   type AssetSearchResult,
   type AnalysisResult,
   analyzeAsset,
-  chatWithAgent,
   getFundNav,
   getHealth,
   getStockHistory,
   getStockValuation,
   searchAssets,
+  streamChatWithAgent,
 } from '@/lib/api'
 import { formatLabel, formatNumber, formatPercent, formatRatioPercentile } from '@/lib/format'
 
@@ -256,58 +256,78 @@ export function DashboardPage() {
 
     setChatInput('')
     setIsChatBusy(true)
+    const assistantMessageId = crypto.randomUUID()
     setChatMessages((items) => [
       ...items,
       { id: crypto.randomUUID(), role: 'user', content: message },
+      { id: assistantMessageId, role: 'assistant', content: '' },
     ])
     try {
-      const response = await chatWithAgent({
-        context: result
-          ? {
-              asset_type: result.asset_type,
-              code: result.code,
-              name: result.name,
-            }
-          : {
-              asset_type: submitted.assetType,
-              code: submitted.code,
-              name: submitted.name,
-            },
-        end: end || undefined,
-        message,
-        start,
-      })
-      setChatMessages((items) => [
-        ...items,
+      await streamChatWithAgent(
         {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: response.answer,
-          citations: response.citations,
-        },
-      ])
-      if (response.asset && response.analysis) {
-        setAssetType(response.asset.asset_type)
-        setCode(response.asset.code)
-        setSelectedAssetName(response.asset.name ?? response.analysis.name)
-        setChatAnalysis(response.analysis)
-        setSubmitted({
-          assetType: response.asset.asset_type,
-          code: response.asset.code,
+          context: result
+            ? {
+                asset_type: result.asset_type,
+                code: result.code,
+                name: result.name,
+              }
+            : {
+                asset_type: submitted.assetType,
+                code: submitted.code,
+                name: submitted.name,
+              },
           end: end || undefined,
-          name: response.asset.name ?? response.analysis.name ?? undefined,
+          message,
           start,
-        })
-      }
-    } catch (error) {
-      setChatMessages((items) => [
-        ...items,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: error instanceof Error ? error.message : '问答请求失败。',
         },
-      ])
+        (event) => {
+          if (event.type === 'meta') {
+            setChatMessages((items) =>
+              items.map((item) =>
+                item.id === assistantMessageId ? { ...item, citations: event.citations } : item,
+              ),
+            )
+            if (event.asset && event.analysis) {
+              setAssetType(event.asset.asset_type)
+              setCode(event.asset.code)
+              setSelectedAssetName(event.asset.name ?? event.analysis.name)
+              setChatAnalysis(event.analysis)
+              setSubmitted({
+                assetType: event.asset.asset_type,
+                code: event.asset.code,
+                end: end || undefined,
+                name: event.asset.name ?? event.analysis.name ?? undefined,
+                start,
+              })
+            }
+          } else if (event.type === 'token') {
+            setChatMessages((items) =>
+              items.map((item) =>
+                item.id === assistantMessageId
+                  ? { ...item, content: `${item.content}${event.delta}` }
+                  : item,
+              ),
+            )
+          } else if (event.type === 'error') {
+            setChatMessages((items) =>
+              items.map((item) =>
+                item.id === assistantMessageId ? { ...item, content: event.message } : item,
+              ),
+            )
+          }
+        },
+      )
+    } catch (error) {
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                content: error instanceof Error ? error.message : '问答请求失败。',
+              }
+            : item,
+        ),
+      )
     } finally {
       setIsChatBusy(false)
     }

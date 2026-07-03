@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from market_lens import __version__
 from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext
@@ -163,3 +165,35 @@ def chat(request: ChatRequest) -> ChatResponse:
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ChatResponse(**result)
+
+
+@app.post("/api/chat/stream")
+def chat_stream(request: ChatRequest) -> StreamingResponse:
+    client = get_client()
+    agent = ChatAgent(data_client=client, analysis_agent=MarketAnalysisAgent(client))
+    context = None
+    if request.context is not None:
+        context = ChatAssetContext(
+            asset_type=request.context.asset_type,
+            code=request.context.code,
+            name=request.context.name,
+        )
+
+    def event_stream():
+        try:
+            for event in agent.stream_reply(
+                message=request.message,
+                context=context,
+                start=request.start,
+                end=request.end or date.today(),
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except (ValueError, EastmoneyError) as exc:
+            payload = {"type": "error", "message": str(exc)}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

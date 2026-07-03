@@ -29,6 +29,19 @@ export interface ChatResponse {
   citations: string[]
 }
 
+export type ChatStreamEvent =
+  | {
+      type: 'meta'
+      intent: string
+      asset: ChatAssetContext | null
+      analysis: AnalysisResult | null
+      candidates: AssetSearchResult[]
+      citations: string[]
+    }
+  | { type: 'token'; delta: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
+
 export interface AssetSearchResult {
   asset_type: AssetType
   code: string
@@ -146,6 +159,52 @@ export function chatWithAgent(payload: ChatRequest) {
     body: JSON.stringify(payload),
     method: 'POST',
   })
+}
+
+export async function streamChatWithAgent(
+  payload: ChatRequest,
+  onEvent: (event: ChatStreamEvent) => void,
+) {
+  const response = await fetch('/api/chat/stream', {
+    body: JSON.stringify(payload),
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+  })
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.detail ?? `Request failed with ${response.status}`)
+  }
+
+  const decoder = new TextDecoder()
+  const reader = response.body.getReader()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const chunks = buffer.split('\n\n')
+    buffer = chunks.pop() ?? ''
+    for (const chunk of chunks) {
+      const data = chunk
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trim())
+        .join('\n')
+      if (!data) continue
+      onEvent(JSON.parse(data) as ChatStreamEvent)
+    }
+  }
+  if (buffer.trim()) {
+    const data = buffer
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n')
+    if (data) onEvent(JSON.parse(data) as ChatStreamEvent)
+  }
 }
 
 export function searchAssets(keyword: string, assetType?: AssetType, limit = 10) {

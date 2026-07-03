@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
@@ -34,6 +35,17 @@ class ChatAssetContext:
     name: str | None = None
 
 
+@dataclass
+class PreparedChatReply:
+    answer: str
+    intent: ChatIntent
+    asset: dict[str, Any] | None
+    analysis: dict[str, Any] | None
+    candidates: list[dict[str, Any]]
+    citations: list[str]
+    llm_messages: list[dict[str, str]] | None = None
+
+
 class ChatAgent:
     def __init__(
         self,
@@ -54,18 +66,42 @@ class ChatAgent:
         start: date,
         end: date,
     ) -> dict[str, Any]:
+        prepared = self.prepare_reply(message, context, start, end)
+        if prepared.llm_messages is None:
+            return prepared_to_response(prepared)
+        answer = self._generate_answer(
+            template_answer=prepared.answer,
+            citations=prepared.citations,
+            llm_messages=prepared.llm_messages,
+        )
+        return {
+            "answer": answer,
+            "intent": prepared.intent,
+            "asset": prepared.asset,
+            "analysis": prepared.analysis,
+            "candidates": prepared.candidates,
+            "citations": prepared.citations,
+        }
+
+    def prepare_reply(
+        self,
+        message: str,
+        context: ChatAssetContext | None,
+        start: date,
+        end: date,
+    ) -> PreparedChatReply:
         normalized_message = message.strip()
         intent = classify_intent(normalized_message)
         asset = self._resolve_asset(normalized_message, context)
         if asset is None:
-            return {
-                "answer": "请告诉我要分析的基金或股票名称/代码，例如“南方红利低波”或“600519”。",
-                "intent": "need_asset",
-                "asset": None,
-                "analysis": None,
-                "candidates": [],
-                "citations": [],
-            }
+            return PreparedChatReply(
+                answer="请告诉我要分析的基金或股票名称/代码，例如“南方红利低波”或“600519”。",
+                intent="need_asset",
+                asset=None,
+                analysis=None,
+                candidates=[],
+                citations=[],
+            )
 
         analysis = self.analysis_agent.analyze(
             asset_type=asset.asset_type,
@@ -80,42 +116,64 @@ class ChatAgent:
         }
         template_answer = build_answer(intent, normalized_message, analysis)
         citations = build_citations(analysis)
-        answer = self._generate_answer(
-            message=normalized_message,
+        return PreparedChatReply(
+            answer=template_answer,
             intent=intent,
-            template_answer=template_answer,
+            asset=asset_payload,
             analysis=analysis,
+            candidates=[],
             citations=citations,
+            llm_messages=build_llm_messages(
+                user_message=normalized_message,
+                intent=intent,
+                template_answer=template_answer,
+                analysis=analysis,
+                citations=citations,
+            ),
         )
-        return {
-            "answer": answer,
-            "intent": intent,
-            "asset": asset_payload,
-            "analysis": analysis,
-            "candidates": [],
-            "citations": citations,
+
+    def stream_reply(
+        self,
+        message: str,
+        context: ChatAssetContext | None,
+        start: date,
+        end: date,
+    ) -> Iterator[dict[str, Any]]:
+        prepared = self.prepare_reply(message, context, start, end)
+        yield {
+            "type": "meta",
+            "intent": prepared.intent,
+            "asset": prepared.asset,
+            "analysis": prepared.analysis,
+            "candidates": prepared.candidates,
+            "citations": prepared.citations,
         }
+        if prepared.llm_messages is None or not self.use_llm:
+            yield {"type": "token", "delta": prepared.answer}
+            yield {"type": "done"}
+            return
+        try:
+            emitted = False
+            for delta in self.llm_client.stream_complete(prepared.llm_messages):
+                emitted = True
+                yield {"type": "token", "delta": delta}
+            if not emitted:
+                yield {"type": "token", "delta": prepared.answer}
+        except LLMError:
+            prepared.citations.append("LLM 流式生成失败，已回退到规则模板回答。")
+            yield {"type": "token", "delta": prepared.answer}
+        yield {"type": "done"}
 
     def _generate_answer(
         self,
-        message: str,
-        intent: ChatIntent,
         template_answer: str,
-        analysis: dict[str, Any],
         citations: list[str],
+        llm_messages: list[dict[str, str]],
     ) -> str:
         if not self.use_llm:
             return template_answer
         try:
-            return self.llm_client.complete(
-                build_llm_messages(
-                    user_message=message,
-                    intent=intent,
-                    template_answer=template_answer,
-                    analysis=analysis,
-                    citations=citations,
-                )
-            )
+            return self.llm_client.complete(llm_messages)
         except LLMError:
             citations.append("LLM 生成失败，已回退到规则模板回答。")
             return template_answer
@@ -153,6 +211,17 @@ def classify_intent(message: str) -> ChatIntent:
     if contains_any(message, ("估值", "贵", "便宜", "高估", "低估", "分位")):
         return "explain_valuation"
     return "analyze_asset"
+
+
+def prepared_to_response(prepared: PreparedChatReply) -> dict[str, Any]:
+    return {
+        "answer": prepared.answer,
+        "intent": prepared.intent,
+        "asset": prepared.asset,
+        "analysis": prepared.analysis,
+        "candidates": prepared.candidates,
+        "citations": prepared.citations,
+    }
 
 
 def contains_any(value: str, keywords: tuple[str, ...]) -> bool:

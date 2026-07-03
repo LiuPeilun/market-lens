@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -55,6 +56,47 @@ class OpenAICompatibleLLMClient:
         if not isinstance(content, str) or not content.strip():
             raise LLMError("LLM response did not include message content")
         return content.strip()
+
+    def stream_complete(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.2,
+            "stream": True,
+        }
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=self.timeout,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        line = line.removeprefix("data:").strip()
+                    if line == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    content = delta.get("content")
+                    if isinstance(content, str) and content:
+                        yield content
+        except httpx.HTTPError as exc:
+            raise LLMError(f"LLM stream request failed: {exc}") from exc
 
 
 def compact_analysis_for_llm(analysis: dict[str, Any]) -> dict[str, Any]:
