@@ -5,11 +5,12 @@ from datetime import date
 from typing import Any, Literal
 
 AssetType = Literal["stock", "fund"]
+SearchAssetType = Literal["stock", "fund", "index"]
 
 
 @dataclass(frozen=True)
 class AssetSearchResult:
-    asset_type: AssetType
+    asset_type: SearchAssetType
     code: str
     name: str
     market: str | None

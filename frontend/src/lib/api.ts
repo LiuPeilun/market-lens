@@ -69,6 +69,16 @@ export interface AnalysisResult {
     pb_percentile?: number | null
     pe_ttm_label?: string
     pb_label?: string
+    score?: number | null
+    level?: string
+    level_zh?: string
+    confidence?: number
+    confidence_label?: string
+    profile?: string
+    profile_name?: string
+    factor_coverage?: number
+    missing_factors?: string[]
+    required_future_data?: string[]
     method?: string
     status?: string
   }

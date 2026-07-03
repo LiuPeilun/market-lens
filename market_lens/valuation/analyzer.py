@@ -4,6 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from market_lens.types import FundNavPoint, StockBar, StockValuationPoint
+from market_lens.valuation.framework import analyze_fund_valuation, analyze_stock_valuation
 from market_lens.valuation.metrics import (
     annualized_return,
     format_pct,
@@ -39,6 +40,8 @@ def analyze_stock(
         total_return = simple_return(bars[0].close, bars[-1].close)
         annualized = annualized_return(bars[0].close, bars[-1].close, bars[0].date, bars[-1].date)
 
+    valuation_framework = analyze_stock_valuation(valuations)
+
     return {
         "asset_type": "stock",
         "code": symbol,
@@ -53,6 +56,7 @@ def analyze_stock(
             "pb_percentile": pb_percentile,
             "pe_ttm_label": valuation_label(pe_percentile),
             "pb_label": valuation_label(pb_percentile),
+            **valuation_framework,
         },
         "performance": {
             "sample_size": len(bars),
@@ -65,6 +69,11 @@ def analyze_stock(
         },
         "notes": [
             "Stock valuation history may not cover a full 10 years for every symbol.",
+            "Composite valuation score is based on available historical valuation percentiles.",
+            (
+                "Industry-relative valuation, dividend yield, ROE, "
+                "and growth quality are planned inputs."
+            ),
             "This is a research summary, not investment advice.",
         ],
         "latest_raw": asdict(latest_valuation) if latest_valuation else None,
@@ -105,13 +114,11 @@ def analyze_fund(
             "annualized_return_text": format_pct(annualized),
             "max_drawdown_text": format_pct(max_drawdown(nav_values)),
         },
-        "valuation": {
-            "method": "nav_performance_only",
-            "status": "holding_weighted_stock_valuation_pending",
-        },
+        "valuation": analyze_fund_valuation(nav_points, name=name),
         "notes": [
             "Fund NAV performance is not the same as holding-level valuation.",
-            "The next useful module is fund holdings plus weighted PE/PB estimation.",
+            "Fund valuation needs holdings, index mapping, and weighted valuation factors.",
+            "Dividend low-volatility funds need dividend yield and volatility factors.",
             "This is a research summary, not investment advice.",
         ],
     }

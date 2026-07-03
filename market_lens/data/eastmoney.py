@@ -27,6 +27,29 @@ class EastmoneyError(RuntimeError):
 
 
 SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
+KNOWN_FUND_MANAGERS = (
+    "易方达",
+    "华夏",
+    "广发",
+    "南方",
+    "富国",
+    "招商",
+    "嘉实",
+    "博时",
+    "鹏华",
+    "汇添富",
+    "工银瑞信",
+    "工银",
+    "华泰柏瑞",
+    "国泰",
+    "天弘",
+    "景顺长城",
+    "景顺",
+    "大成",
+    "永赢",
+    "长城",
+    "泰康",
+)
 
 
 class EastmoneyClient:
@@ -124,42 +147,133 @@ class EastmoneyClient:
             rows.extend(page_data["rows"])
         return sorted(rows, key=lambda item: item.date)
 
+    def get_exchange_fund_price_nav(
+        self,
+        code: str,
+        start: date,
+        end: date,
+        period: str = "daily",
+        adjust: str = "qfq",
+    ) -> list[FundNavPoint]:
+        period_map = {"daily": "101", "weekly": "102", "monthly": "103"}
+        adjust_map = {"none": "0", "qfq": "1", "hfq": "2"}
+        if period not in period_map:
+            raise ValueError("period must be one of: daily, weekly, monthly")
+        if adjust not in adjust_map:
+            raise ValueError("adjust must be one of: none, qfq, hfq")
+
+        secid = infer_exchange_fund_secid(code)
+        if secid is None:
+            return []
+
+        params = {
+            "secid": secid,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": period_map[period],
+            "fqt": adjust_map[adjust],
+            "beg": compact_date(start),
+            "end": compact_date(end),
+        }
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(params)
+        payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+        data = payload.get("data")
+        if not data:
+            return []
+        klines = data.get("klines") or []
+        bars = [parse_stock_kline(item) for item in klines]
+        return [
+            FundNavPoint(
+                date=bar.date,
+                unit_nav=bar.close,
+                cumulative_nav=bar.close,
+                daily_growth_pct=bar.change_pct,
+                subscribe_status="场内价格",
+                redeem_status="场内价格",
+            )
+            for bar in bars
+        ]
+
+    def get_index_history(
+        self,
+        quote_id: str,
+        start: date,
+        end: date,
+        period: str = "daily",
+    ) -> list[StockBar]:
+        period_map = {"daily": "101", "weekly": "102", "monthly": "103"}
+        if period not in period_map:
+            raise ValueError("period must be one of: daily, weekly, monthly")
+
+        params = {
+            "secid": quote_id,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": period_map[period],
+            "fqt": "1",
+            "beg": compact_date(start),
+            "end": compact_date(end),
+        }
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(params)
+        payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+        data = payload.get("data")
+        if not data:
+            return []
+        klines = data.get("klines") or []
+        return [parse_stock_kline(item) for item in klines]
+
     def search_assets(
         self,
         keyword: str,
         asset_type: AssetType | None = None,
         limit: int = 10,
+        include_indexes: bool = False,
     ) -> list[AssetSearchResult]:
         normalized_keyword = keyword.strip()
         if not normalized_keyword:
             return []
 
-        params = {
-            "input": normalized_keyword,
-            "type": "14",
-            "token": SEARCH_TOKEN,
-            "count": str(limit),
-        }
-        url = "https://searchapi.eastmoney.com/api/suggest/get?" + urlencode(params)
-        payload = self._get_json(url, ttl_seconds=6 * 60 * 60)
-        table = payload.get("QuotationCodeTable") or {}
-        rows = table.get("Data") or []
         results: list[AssetSearchResult] = []
         seen: set[tuple[AssetType, str]] = set()
-        for row in rows:
-            result = parse_asset_search_row(row)
-            if result is None:
-                continue
-            if asset_type is not None and result.asset_type != asset_type:
-                continue
-            key = (result.asset_type, result.code)
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append(result)
-            if len(results) >= limit:
-                break
-        return results
+        query_limit = max(limit, 20)
+        for search_keyword in build_search_keywords(normalized_keyword):
+            params = {
+                "input": search_keyword,
+                "type": "14",
+                "token": SEARCH_TOKEN,
+                "count": str(query_limit),
+            }
+            url = "https://searchapi.eastmoney.com/api/suggest/get?" + urlencode(params)
+            payload = self._get_json(url, ttl_seconds=6 * 60 * 60)
+            table = payload.get("QuotationCodeTable") or {}
+            rows = table.get("Data") or []
+            for row in rows:
+                result = parse_asset_search_row(row)
+                if result is None:
+                    continue
+                if result.asset_type == "index" and not include_indexes:
+                    continue
+                if asset_type is not None and result.asset_type != asset_type:
+                    continue
+                key = (result.asset_type, result.code)
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(result)
+
+        return rank_search_results(normalized_keyword, results)[:limit]
+
+    def find_index_for_fund(
+        self,
+        fund_name: str | None,
+        limit: int = 5,
+    ) -> AssetSearchResult | None:
+        for keyword in build_index_search_keywords(fund_name or ""):
+            candidates = self.search_assets(keyword, limit=limit, include_indexes=True)
+            indexes = [item for item in candidates if item.asset_type == "index"]
+            if indexes:
+                return rank_search_results(keyword, indexes)[0]
+        return None
 
     def _get_fund_nav_page(
         self,
@@ -283,6 +397,15 @@ def infer_secid(symbol: str) -> str:
     return f"0.{code}"
 
 
+def infer_exchange_fund_secid(code: str) -> str | None:
+    normalized_code = normalize_fund_code(code)
+    if normalized_code.startswith("5"):
+        return f"1.{normalized_code}"
+    if normalized_code.startswith("1"):
+        return f"0.{normalized_code}"
+    return None
+
+
 def is_a_share_symbol(symbol: str) -> bool:
     code = normalize_symbol(symbol)
     return code.startswith(
@@ -383,20 +506,27 @@ def parse_stock_valuation_row(row: dict[str, Any]) -> StockValuationPoint:
 
 def parse_asset_search_row(row: dict[str, Any]) -> AssetSearchResult | None:
     code = str(row.get("UnifiedCode") or row.get("Code") or "").strip()
-    if not re.fullmatch(r"\d{6}", code):
-        return None
 
     classify = str(row.get("Classify") or "").strip()
     security_type_name = repair_mojibake(str(row.get("SecurityTypeName") or "").strip()) or None
-    asset_type: AssetType | None = None
+    asset_type: str | None = None
     if classify == "AStock":
+        if not re.fullmatch(r"\d{6}", code):
+            return None
         try:
             if is_a_share_symbol(code):
                 asset_type = "stock"
         except ValueError:
             return None
     elif classify in {"Fund", "OTCFUND"} or security_type_name == "基金":
+        if not re.fullmatch(r"\d{6}", code):
+            return None
         asset_type = "fund"
+    elif classify in {"Index", "24"} or security_type_name == "指数":
+        if not re.fullmatch(r"[A-Z0-9]{5,8}", code.upper()):
+            return None
+        code = code.upper()
+        asset_type = "index"
 
     if asset_type is None:
         return None
@@ -413,6 +543,90 @@ def parse_asset_search_row(row: dict[str, Any]) -> AssetSearchResult | None:
         source_type=classify or None,
         raw=row,
     )
+
+
+def normalize_search_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).upper()
+
+
+def build_search_keywords(keyword: str) -> list[str]:
+    normalized = normalize_search_text(keyword)
+    if not normalized:
+        return []
+
+    keywords = [normalized]
+    for manager in KNOWN_FUND_MANAGERS:
+        if manager not in normalized:
+            continue
+        stripped = normalized.replace(manager, "")
+        if len(stripped) >= 2:
+            keywords.append(stripped)
+        keywords.append(manager)
+    return list(dict.fromkeys(keywords))
+
+
+def build_index_search_keywords(fund_name: str) -> list[str]:
+    normalized = normalize_search_text(fund_name)
+    if not normalized:
+        return []
+
+    candidates = [normalized]
+    stripped = normalized
+    for manager in KNOWN_FUND_MANAGERS:
+        stripped = stripped.replace(manager, "")
+    stripped = re.sub(r"\([^)]*\)", "", stripped)
+    stripped = re.sub(r"(ETF|LOF|QDII|联接|基金|指数|增强|发起式|场内|A|C)$", "", stripped)
+    stripped = re.sub(r"(ETF|LOF|QDII|联接|基金|指数|增强|发起式|场内)", "", stripped)
+    stripped = stripped.strip()
+    if len(stripped) >= 2:
+        candidates.append(stripped)
+    without_tail_number = re.sub(r"\d+$", "", stripped)
+    if len(without_tail_number) >= 2:
+        candidates.append(without_tail_number)
+    return list(dict.fromkeys(candidates))
+
+
+def search_terms(keyword: str) -> list[str]:
+    normalized = normalize_search_text(keyword)
+    terms = [normalized] if normalized else []
+    for manager in KNOWN_FUND_MANAGERS:
+        if manager in normalized:
+            terms.append(manager)
+            stripped = normalized.replace(manager, "")
+            if len(stripped) >= 2:
+                terms.append(stripped)
+    return list(dict.fromkeys(terms))
+
+
+def rank_search_results(
+    keyword: str,
+    results: list[AssetSearchResult],
+) -> list[AssetSearchResult]:
+    return sorted(
+        results,
+        key=lambda item: search_result_score(keyword, item),
+        reverse=True,
+    )
+
+
+def search_result_score(keyword: str, result: AssetSearchResult) -> int:
+    normalized_keyword = normalize_search_text(keyword)
+    normalized_name = normalize_search_text(result.name)
+    score = 0
+    if result.code == normalized_keyword:
+        score += 10000
+    if normalized_name == normalized_keyword:
+        score += 9000
+    if normalized_keyword and normalized_keyword in normalized_name:
+        score += 3000 + len(normalized_keyword)
+
+    for term in search_terms(normalized_keyword):
+        if term and term in normalized_name:
+            score += 200 + len(term) * 10
+
+    if result.asset_type == "fund" and any(word in normalized_name for word in ("ETF", "LOF")):
+        score += 30
+    return score
 
 
 def parse_pingzhongdata_fund_name(text: str) -> str | None:

@@ -438,6 +438,21 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
       value: formatNumber(price),
     },
     {
+      icon: <Activity className="size-4 text-primary" />,
+      label: '综合估值',
+      value: valuation?.level_zh ?? '—',
+    },
+    {
+      icon: <Activity className="size-4 text-primary" />,
+      label: '估值分',
+      value: formatNumber(valuation?.score, 1),
+    },
+    {
+      icon: <Activity className="size-4 text-primary" />,
+      label: '置信度',
+      value: formatPercent(valuation?.confidence, 0),
+    },
+    {
       icon: <TrendingUp className="size-4 text-primary" />,
       label: '总收益',
       value: formatPercent(result?.performance.total_return),
@@ -479,7 +494,7 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
               {isBusy ? (
                 <Skeleton className="mt-2 h-7 w-24" />
               ) : (
-                <div className="mt-1 text-2xl font-semibold">{item.value}</div>
+                <div className="mt-1 text-xl font-semibold sm:text-2xl">{item.value}</div>
               )}
             </div>
           </CardContent>
@@ -491,10 +506,16 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
             <Activity className="size-4 text-primary" />
           </div>
           <div className="min-w-0">
-            <div className="text-xs text-muted-foreground">估值标签</div>
+            <div className="text-xs text-muted-foreground">估值策略</div>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Badge variant="warning">{formatLabel(result?.valuation.pe_ttm_label)}</Badge>
-              <Badge variant="secondary">{formatLabel(result?.valuation.pb_label)}</Badge>
+              <Badge variant="warning">{result?.valuation.profile_name ?? '—'}</Badge>
+              <Badge variant="secondary">{formatLabel(result?.valuation.confidence_label)}</Badge>
+              {result?.asset_type === 'stock' ? (
+                <>
+                  <Badge variant="outline">PE {formatLabel(result?.valuation.pe_ttm_label)}</Badge>
+                  <Badge variant="outline">PB {formatLabel(result?.valuation.pb_label)}</Badge>
+                </>
+              ) : null}
             </div>
           </div>
         </CardContent>
