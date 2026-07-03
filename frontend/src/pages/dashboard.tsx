@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { EChartsOption } from 'echarts'
 import ReactECharts from 'echarts-for-react'
-import { Activity, Database, Search, Server, TrendingDown, TrendingUp } from 'lucide-react'
+import { Activity, Database, MessageCircle, Search, Send, Server, TrendingDown, TrendingUp } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -26,6 +26,7 @@ import {
   type AssetSearchResult,
   type AnalysisResult,
   analyzeAsset,
+  chatWithAgent,
   getFundNav,
   getHealth,
   getStockHistory,
@@ -40,6 +41,13 @@ interface SubmittedQuery {
   name?: string
   start: string
   end?: string
+}
+
+interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  citations?: string[]
 }
 
 const defaultQuery: SubmittedQuery = {
@@ -58,6 +66,16 @@ export function DashboardPage() {
   const [debouncedKeyword, setDebouncedKeyword] = useState(defaultQuery.code)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isResolving, setIsResolving] = useState(false)
+  const [chatInput, setChatInput] = useState('')
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: '可以直接问我某只基金或股票的估值、收益、回撤和数据来源。',
+    },
+  ])
+  const [isChatBusy, setIsChatBusy] = useState(false)
+  const [chatAnalysis, setChatAnalysis] = useState<AnalysisResult | null>(null)
   const trimmedCode = code.trim()
 
   useEffect(() => {
@@ -141,7 +159,7 @@ export function DashboardPage() {
     }
   }, [fundNavQuery.data?.items, stockHistoryQuery.data?.items, submitted.assetType])
 
-  const result = analysisQuery.data
+  const result = analysisQuery.data ?? chatAnalysis ?? undefined
   const currentAssetLabel = formatAssetLabel(
     result?.name ?? submitted.name,
     result?.code ?? submitted.code,
@@ -173,6 +191,7 @@ export function DashboardPage() {
       const submittedAssetType = inferSubmittedAssetType(normalizedInput, assetType)
       setAssetType(submittedAssetType)
       setSelectedAssetName(null)
+      setChatAnalysis(null)
       setSubmitted({
         assetType: submittedAssetType,
         code: normalizedInput,
@@ -209,6 +228,7 @@ export function DashboardPage() {
     }
     setSelectedAssetName(null)
     setSubmitError(null)
+    setChatAnalysis(null)
     setEnd('')
   }
 
@@ -217,6 +237,7 @@ export function DashboardPage() {
     setCode(candidate.code)
     setSelectedAssetName(candidate.name)
     setSubmitError(null)
+    setChatAnalysis(null)
     if (options?.submit) {
       setSubmitted({
         assetType: candidate.asset_type,
@@ -228,8 +249,72 @@ export function DashboardPage() {
     }
   }
 
+  async function submitChat(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const message = chatInput.trim()
+    if (!message || isChatBusy) return
+
+    setChatInput('')
+    setIsChatBusy(true)
+    setChatMessages((items) => [
+      ...items,
+      { id: crypto.randomUUID(), role: 'user', content: message },
+    ])
+    try {
+      const response = await chatWithAgent({
+        context: result
+          ? {
+              asset_type: result.asset_type,
+              code: result.code,
+              name: result.name,
+            }
+          : {
+              asset_type: submitted.assetType,
+              code: submitted.code,
+              name: submitted.name,
+            },
+        end: end || undefined,
+        message,
+        start,
+      })
+      setChatMessages((items) => [
+        ...items,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: response.answer,
+          citations: response.citations,
+        },
+      ])
+      if (response.asset && response.analysis) {
+        setAssetType(response.asset.asset_type)
+        setCode(response.asset.code)
+        setSelectedAssetName(response.asset.name ?? response.analysis.name)
+        setChatAnalysis(response.analysis)
+        setSubmitted({
+          assetType: response.asset.asset_type,
+          code: response.asset.code,
+          end: end || undefined,
+          name: response.asset.name ?? response.analysis.name ?? undefined,
+          start,
+        })
+      }
+    } catch (error) {
+      setChatMessages((items) => [
+        ...items,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: error instanceof Error ? error.message : '问答请求失败。',
+        },
+      ])
+    } finally {
+      setIsChatBusy(false)
+    }
+  }
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+    <main className="mx-auto flex min-h-screen w-full max-w-[1760px] flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
       <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="mb-2 flex items-center gap-2">
@@ -252,7 +337,7 @@ export function DashboardPage() {
         </div>
       </header>
 
-      <section className="grid gap-6 lg:grid-cols-[360px_1fr]">
+      <section className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <Card>
           <CardHeader>
             <CardTitle>查询</CardTitle>
@@ -362,7 +447,7 @@ export function DashboardPage() {
               <Badge variant="outline">{currentAssetLabel}</Badge>
             </CardHeader>
             <CardContent>
-              <div className="h-[320px]">
+              <div className="h-[420px]">
                 {isBusy ? (
                   <Skeleton className="h-full w-full" />
                 ) : (
@@ -372,7 +457,16 @@ export function DashboardPage() {
             </CardContent>
           </Card>
         </div>
+
       </section>
+
+      <ChatPanel
+        input={chatInput}
+        isBusy={isChatBusy}
+        messages={chatMessages}
+        onChangeInput={setChatInput}
+        onSubmit={submitChat}
+      />
 
       <Tabs defaultValue="analysis">
         <TabsList>
@@ -401,6 +495,76 @@ export function DashboardPage() {
         </TabsContent>
       </Tabs>
     </main>
+  )
+}
+
+function ChatPanel({
+  input,
+  isBusy,
+  messages,
+  onChangeInput,
+  onSubmit,
+}: {
+  input: string
+  isBusy: boolean
+  messages: ChatMessage[]
+  onChangeInput: (value: string) => void
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <MessageCircle className="size-4" />
+          智能问答
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="flex max-h-[360px] min-h-[260px] flex-col gap-3 overflow-auto rounded-md border bg-muted/30 p-3">
+          {messages.map((message) => (
+            <div
+              className={
+                message.role === 'user'
+                  ? 'ml-6 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground'
+                  : 'mr-6 rounded-md bg-background px-3 py-2 text-sm shadow-sm'
+              }
+              key={message.id}
+            >
+              <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+              {message.citations?.length ? (
+                <div className="mt-2 grid gap-1 border-t pt-2 text-xs text-muted-foreground">
+                  {message.citations.map((citation) => (
+                    <div key={citation}>{citation}</div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {isBusy ? <Skeleton className="h-16 w-4/5" /> : null}
+        </div>
+        <div className="grid content-between gap-4">
+          <div className="rounded-md border bg-muted/20 p-4">
+            <div className="text-sm font-medium">可直接提问</div>
+            <div className="mt-2 grid gap-2 text-sm text-muted-foreground">
+              <div>南方红利低波贵不贵？</div>
+              <div>贵州茅台现在估值怎么样？</div>
+              <div>这只基金最大回撤大吗？</div>
+            </div>
+          </div>
+          <form className="flex gap-2" onSubmit={onSubmit}>
+            <Input
+              disabled={isBusy}
+              placeholder="输入你的问题"
+              value={input}
+              onChange={(event) => onChangeInput(event.target.value)}
+            />
+            <Button disabled={isBusy || !input.trim()} size="icon" type="submit">
+              <Send className="size-4" />
+            </Button>
+          </form>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -482,25 +646,27 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
   ].filter((item) => item.visible !== false)
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
       {metrics.map((item) => (
         <Card key={item.label}>
           <CardContent className="flex min-h-24 items-center gap-4 p-4">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
               {item.icon}
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="text-xs text-muted-foreground">{item.label}</div>
               {isBusy ? (
                 <Skeleton className="mt-2 h-7 w-24" />
               ) : (
-                <div className="mt-1 text-xl font-semibold sm:text-2xl">{item.value}</div>
+                <div className="mt-1 break-words text-xl font-semibold leading-tight 2xl:text-2xl">
+                  {item.value}
+                </div>
               )}
             </div>
           </CardContent>
         </Card>
       ))}
-      <Card>
+      <Card className="sm:col-span-2 xl:col-span-2">
         <CardContent className="flex min-h-24 items-center gap-4 p-4">
           <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
             <Activity className="size-4 text-primary" />

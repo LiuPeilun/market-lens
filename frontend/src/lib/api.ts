@@ -7,6 +7,28 @@ export interface AnalyzeRequest {
   end?: string
 }
 
+export interface ChatAssetContext {
+  asset_type: AssetType
+  code: string
+  name?: string | null
+}
+
+export interface ChatRequest {
+  message: string
+  context?: ChatAssetContext | null
+  start: string
+  end?: string
+}
+
+export interface ChatResponse {
+  answer: string
+  intent: string
+  asset: ChatAssetContext | null
+  analysis: AnalysisResult | null
+  candidates: AssetSearchResult[]
+  citations: string[]
+}
+
 export interface AssetSearchResult {
   asset_type: AssetType
   code: string
@@ -119,6 +141,13 @@ export function analyzeAsset(payload: AnalyzeRequest) {
   }).then((data) => data.result)
 }
 
+export function chatWithAgent(payload: ChatRequest) {
+  return requestJson<ChatResponse>('/api/chat', {
+    body: JSON.stringify(payload),
+    method: 'POST',
+  })
+}
+
 export function searchAssets(keyword: string, assetType?: AssetType, limit = 10) {
   const params = new URLSearchParams({ keyword, limit: String(limit) })
   if (assetType) params.set('asset_type', assetType)
@@ -144,7 +173,13 @@ export function getStockValuation(symbol: string) {
 export function getFundNav(code: string, start: string, end?: string) {
   const params = new URLSearchParams({ start })
   if (end) params.set('end', end)
-  return requestJson<{ code: string; name: string | null; count: number; items: FundNavPoint[] }>(
+  return requestJson<{
+    code: string
+    name: string | null
+    data_source?: string
+    count: number
+    items: FundNavPoint[]
+  }>(
     `/api/funds/${code}/nav?${params.toString()}`,
   )
 }

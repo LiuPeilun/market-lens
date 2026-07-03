@@ -6,8 +6,15 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, HTTPException, Query
 
 from market_lens import __version__
+from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext
 from market_lens.agent.market_agent import MarketAnalysisAgent
-from market_lens.api.schemas import AnalyzeRequest, AnalyzeResponse, AssetSearchResponse
+from market_lens.api.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AssetSearchResponse,
+    ChatRequest,
+    ChatResponse,
+)
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError
 
 app = FastAPI(
@@ -79,13 +86,17 @@ def fund_nav(
 ) -> dict[str, object]:
     client = get_client()
     try:
-        rows = client.get_fund_nav(code, start=start, end=end or date.today())
+        rows = client.get_exchange_fund_price_nav(code, start=start, end=end or date.today())
+        data_source = "exchange_price_history" if rows else "fund_nav_history"
+        if not rows:
+            rows = client.get_fund_nav(code, start=start, end=end or date.today())
         fund_name = client.get_fund_name(code)
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "code": code,
         "name": fund_name,
+        "data_source": data_source,
         "count": len(rows),
         "items": [item.__dict__ for item in rows],
     }
@@ -129,3 +140,26 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return AnalyzeResponse(result=result)
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+def chat(request: ChatRequest) -> ChatResponse:
+    client = get_client()
+    agent = ChatAgent(data_client=client, analysis_agent=MarketAnalysisAgent(client))
+    context = None
+    if request.context is not None:
+        context = ChatAssetContext(
+            asset_type=request.context.asset_type,
+            code=request.context.code,
+            name=request.context.name,
+        )
+    try:
+        result = agent.reply(
+            message=request.message,
+            context=context,
+            start=request.start,
+            end=request.end or date.today(),
+        )
+    except (ValueError, EastmoneyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ChatResponse(**result)
