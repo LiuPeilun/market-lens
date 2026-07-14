@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
+from math import sqrt
+from statistics import pstdev
 from typing import Any, Literal
 
-from market_lens.types import FundNavPoint, StockBar, StockValuationPoint
+from market_lens.types import FundHolding, FundNavPoint, StockBar, StockValuationPoint
 from market_lens.valuation.metrics import percentile_rank
 
 ValuationLevel = Literal[
@@ -63,27 +66,27 @@ GENERIC_STOCK_PROFILE = ValuationProfile(
 DIVIDEND_LOW_VOL_FUND_PROFILE = ValuationProfile(
     key="dividend_low_volatility_fund",
     name="红利低波基金",
-    method="fund_holdings_or_index_weighted_valuation_pending",
+    method="holdings_weighted_multi_factor",
     factors=(
         FactorSpec("dividend_yield", "股息率", 0.40, lower_is_cheaper=False),
-        FactorSpec("pb", "PB", 0.25),
-        FactorSpec("pe_ttm", "PE TTM", 0.20),
-        FactorSpec("volatility", "波动率", 0.15),
+        FactorSpec("pb_historical_percentile", "持仓加权 PB 历史分位", 0.25),
+        FactorSpec("pe_historical_percentile", "持仓加权 PE 历史分位", 0.20),
+        FactorSpec("peer_pe_percentile", "同行业 PE 相对分位", 0.15),
     ),
-    required_future_data=("基金持仓", "持仓权重", "成分股股息率", "成分股估值", "波动率"),
+    required_future_data=("完整持仓", "指数估值历史", "基金实时申赎与折溢价"),
 )
 
 GENERIC_FUND_PROFILE = ValuationProfile(
     key="generic_fund",
     name="基金",
-    method="fund_holdings_or_index_weighted_valuation_pending",
+    method="holdings_weighted_multi_factor",
     factors=(
-        FactorSpec("weighted_pe_ttm", "持仓加权 PE TTM", 0.35),
-        FactorSpec("weighted_pb", "持仓加权 PB", 0.30),
-        FactorSpec("style_relative_percentile", "同类风格分位", 0.20),
-        FactorSpec("premium_discount", "溢价率/折价率", 0.15),
+        FactorSpec("pe_historical_percentile", "持仓加权 PE 历史分位", 0.35),
+        FactorSpec("pb_historical_percentile", "持仓加权 PB 历史分位", 0.30),
+        FactorSpec("peer_pe_percentile", "同行业 PE 相对分位", 0.20),
+        FactorSpec("dividend_yield", "股息率", 0.15, lower_is_cheaper=False),
     ),
-    required_future_data=("基金持仓", "跟踪指数", "持仓权重", "同类基金分类"),
+    required_future_data=("完整持仓", "同类基金风格分位", "基金实时申赎与折溢价"),
 )
 
 INDEX_ETF_PROFILE = ValuationProfile(
@@ -192,8 +195,92 @@ def infer_fund_profile(name: str | None) -> ValuationProfile:
 def analyze_fund_valuation(
     nav_points: list[FundNavPoint],
     name: str | None = None,
+    holdings: list[FundHolding] | None = None,
+    holding_analyses: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     profile = infer_fund_profile(name)
+    holdings = holdings or []
+    holding_analyses = holding_analyses or {}
+    if not holdings:
+        return pending_fund_valuation(profile, nav_points)
+
+    latest_nav_date = nav_points[-1].date if nav_points else date.today()
+    report_date = next((item.report_date for item in holdings if item.report_date), None)
+    if report_date and report_date > latest_nav_date:
+        result = pending_fund_valuation(profile, nav_points)
+        result.update(
+            {
+                "status": "holdings_after_analysis_date",
+                "holdings": summarize_holdings(holdings, holding_analyses, latest_nav_date),
+            }
+        )
+        return result
+
+    portfolio = build_holdings_portfolio(holdings, holding_analyses, nav_points)
+    factor_results: list[dict[str, Any]] = []
+    missing_factors: list[str] = []
+    total_model_weight = sum(factor.weight for factor in profile.factors)
+    available_model_weight = 0.0
+    weighted_data_coverage = 0.0
+
+    for factor in profile.factors:
+        metric = portfolio["metrics"].get(factor.key) or {}
+        value = metric.get("value")
+        if value is None:
+            missing_factors.append(factor.key)
+            continue
+        score = fund_factor_score(factor.key, value)
+        available_model_weight += factor.weight
+        weighted_data_coverage += factor.weight * float(metric.get("coverage") or 0)
+        level = valuation_level(score)
+        factor_results.append(
+            {
+                "key": factor.key,
+                "name": factor.name,
+                "weight": factor.weight,
+                "value": value,
+                "coverage": metric.get("coverage"),
+                "score": round(score, 2),
+                "level": level,
+                "level_zh": LEVEL_LABELS_ZH[level],
+            }
+        )
+
+    score = None
+    if available_model_weight:
+        score = sum(item["score"] * item["weight"] for item in factor_results)
+        score /= available_model_weight
+    factor_coverage = available_model_weight / total_model_weight if total_model_weight else 0
+    data_coverage = weighted_data_coverage / total_model_weight if total_model_weight else 0
+    report_recency = holdings_recency_factor(report_date, latest_nav_date)
+    confidence = round(data_coverage * report_recency, 2)
+    level = valuation_level(score)
+
+    return {
+        "method": profile.method,
+        "profile": profile.key,
+        "profile_name": profile.name,
+        "score": round(score, 2) if score is not None else None,
+        "level": level,
+        "level_zh": LEVEL_LABELS_ZH[level],
+        "confidence": confidence,
+        "confidence_label": confidence_label(confidence),
+        "factor_coverage": round(factor_coverage, 2),
+        "holding_factor_coverage": round(data_coverage, 2),
+        "factors": factor_results,
+        "missing_factors": missing_factors,
+        "required_future_data": list(profile.required_future_data),
+        "status": "holdings_valuation" if score is not None else "valuation_data_pending",
+        "nav_sample_size": len(nav_points),
+        "portfolio": portfolio,
+        "holdings": summarize_holdings(holdings, holding_analyses, latest_nav_date),
+    }
+
+
+def pending_fund_valuation(
+    profile: ValuationProfile,
+    nav_points: list[FundNavPoint],
+) -> dict[str, Any]:
     level = valuation_level(None)
     return {
         "method": profile.method,
@@ -211,6 +298,181 @@ def analyze_fund_valuation(
         "status": "valuation_data_pending",
         "nav_sample_size": len(nav_points),
     }
+
+
+def fund_factor_score(key: str, value: float) -> float:
+    if key == "dividend_yield":
+        # 6% is used as a transparent high-yield anchor; higher yield means cheaper.
+        return max(0.0, min(100.0, 100.0 - value / 0.06 * 100.0))
+    return max(0.0, min(100.0, value * 100.0))
+
+
+def build_holdings_portfolio(
+    holdings: list[FundHolding],
+    analyses: dict[str, dict[str, Any]],
+    nav_points: list[FundNavPoint],
+) -> dict[str, Any]:
+    metric_paths = {
+        "weighted_pe_ttm": ("valuation", "pe_ttm"),
+        "weighted_pb": ("valuation", "pb"),
+        "pe_historical_percentile": ("valuation", "pe_ttm_percentile"),
+        "pb_historical_percentile": ("valuation", "pb_percentile"),
+        "peer_pe_percentile": (
+            "valuation",
+            "peer_comparison",
+            "valuation",
+            "percentiles",
+            "pe_ttm",
+        ),
+        "roe_weighted": ("valuation", "fundamentals", "roe_weighted"),
+        "parent_netprofit_growth_pct": (
+            "valuation",
+            "fundamentals",
+            "parent_netprofit_growth_pct",
+        ),
+        "revenue_growth_pct": (
+            "valuation",
+            "fundamentals",
+            "revenue_growth_pct",
+        ),
+        "dividend_yield": ("valuation", "dividend", "dividend_yield"),
+    }
+    metrics = {
+        key: weighted_holding_metric(
+            holdings,
+            analyses,
+            path,
+            positive=key in {"weighted_pe_ttm", "weighted_pb"},
+        )
+        for key, path in metric_paths.items()
+    }
+    metrics["annualized_volatility"] = {
+        "value": annualized_nav_volatility(nav_points),
+        "coverage": 1.0 if len(nav_points) >= 20 else 0.0,
+    }
+    return {
+        "metrics": metrics,
+        "industry_weights": aggregate_industry_weights(holdings, analyses),
+    }
+
+
+def weighted_holding_metric(
+    holdings: list[FundHolding],
+    analyses: dict[str, dict[str, Any]],
+    path: tuple[str, ...],
+    positive: bool = False,
+) -> dict[str, float | None]:
+    weighted_sum = 0.0
+    available_weight = 0.0
+    for holding in holdings:
+        weight = (holding.weight_pct or 0.0) / 100.0
+        value = nested_value(analyses.get(holding.code), path)
+        if not isinstance(value, (int, float)) or (positive and value <= 0) or weight <= 0:
+            continue
+        weighted_sum += float(value) * weight
+        available_weight += weight
+    return {
+        "value": round(weighted_sum / available_weight, 6) if available_weight else None,
+        "coverage": round(available_weight, 4),
+    }
+
+
+def nested_value(value: dict[str, Any] | None, path: tuple[str, ...]) -> Any:
+    current: Any = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def aggregate_industry_weights(
+    holdings: list[FundHolding],
+    analyses: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    weights: dict[str, float] = {}
+    for holding in holdings:
+        industry = nested_value(
+            analyses.get(holding.code),
+            ("valuation", "industry", "em_industry"),
+        )
+        if not industry or holding.weight_pct is None:
+            continue
+        weights[str(industry)] = weights.get(str(industry), 0.0) + holding.weight_pct
+    return [
+        {"industry": industry, "weight_pct": round(weight, 2)}
+        for industry, weight in sorted(weights.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+
+def summarize_holdings(
+    holdings: list[FundHolding],
+    analyses: dict[str, dict[str, Any]],
+    as_of: date,
+) -> dict[str, Any]:
+    report_date = next((item.report_date for item in holdings if item.report_date), None)
+    total_weight = sum(item.weight_pct or 0.0 for item in holdings)
+    analyzed_weight = sum(
+        item.weight_pct or 0.0 for item in holdings if analyses.get(item.code) is not None
+    )
+    return {
+        "report_date": report_date.isoformat() if report_date else None,
+        "report_age_days": max((as_of - report_date).days, 0) if report_date else None,
+        "count": len(holdings),
+        "analyzed_count": sum(1 for item in holdings if analyses.get(item.code) is not None),
+        "top_holdings_weight": round(total_weight / 100.0, 4),
+        "analyzed_holdings_weight": round(analyzed_weight / 100.0, 4),
+        "items": [serialize_holding(item, analyses.get(item.code)) for item in holdings],
+    }
+
+
+def serialize_holding(
+    holding: FundHolding,
+    analysis: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "rank": holding.rank,
+        "code": holding.code,
+        "name": holding.name,
+        "weight_pct": holding.weight_pct,
+        "shares_10k": holding.shares_10k,
+        "market_value_10k": holding.market_value_10k,
+        "analysis_available": analysis is not None,
+        "industry": nested_value(analysis, ("valuation", "industry", "em_industry")),
+        "pe_ttm": nested_value(analysis, ("valuation", "pe_ttm")),
+        "pb": nested_value(analysis, ("valuation", "pb")),
+        "roe_weighted": nested_value(analysis, ("valuation", "fundamentals", "roe_weighted")),
+        "parent_netprofit_growth_pct": nested_value(
+            analysis,
+            ("valuation", "fundamentals", "parent_netprofit_growth_pct"),
+        ),
+        "dividend_yield": nested_value(analysis, ("valuation", "dividend", "dividend_yield")),
+    }
+
+
+def annualized_nav_volatility(nav_points: list[FundNavPoint]) -> float | None:
+    values = [item.unit_nav for item in nav_points if item.unit_nav is not None]
+    returns = [
+        current / previous - 1
+        for previous, current in zip(values, values[1:], strict=False)
+        if previous
+    ]
+    if len(returns) < 20:
+        return None
+    return round(pstdev(returns) * sqrt(252), 6)
+
+
+def holdings_recency_factor(report_date: date | None, as_of: date) -> float:
+    if report_date is None:
+        return 0.5
+    age = max((as_of - report_date).days, 0)
+    if age <= 120:
+        return 1.0
+    if age <= 240:
+        return 0.8
+    if age <= 365:
+        return 0.6
+    return 0.4
 
 
 def analyze_index_price_proxy(

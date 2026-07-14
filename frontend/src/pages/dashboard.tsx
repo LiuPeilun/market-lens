@@ -61,7 +61,7 @@ export function DashboardPage() {
   const [code, setCode] = useState(defaultQuery.code)
   const [start, setStart] = useState(defaultQuery.start)
   const [end, setEnd] = useState('')
-  const [submitted, setSubmitted] = useState<SubmittedQuery>(defaultQuery)
+  const [submitted, setSubmitted] = useState<SubmittedQuery | null>(null)
   const [selectedAssetName, setSelectedAssetName] = useState<string | null>(null)
   const [debouncedKeyword, setDebouncedKeyword] = useState(defaultQuery.code)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -95,38 +95,39 @@ export function DashboardPage() {
   })
 
   const analysisQuery = useQuery({
-    enabled: Boolean(submitted.code && submitted.start),
+    enabled: Boolean(submitted?.code && submitted.start),
     queryFn: () =>
       analyzeAsset({
-        asset_type: submitted.assetType,
-        code: submitted.code,
-        end: submitted.end,
-        start: submitted.start,
+        asset_type: submitted!.assetType,
+        code: submitted!.code,
+        end: submitted!.end,
+        start: submitted!.start,
       }),
     queryKey: ['analysis', submitted],
   })
 
   const stockHistoryQuery = useQuery({
-    enabled: submitted.assetType === 'stock',
-    queryFn: () => getStockHistory(submitted.code, submitted.start, submitted.end),
+    enabled: submitted?.assetType === 'stock',
+    queryFn: () => getStockHistory(submitted!.code, submitted!.start, submitted!.end),
     queryKey: ['stock-history', submitted],
   })
 
   const stockValuationQuery = useQuery({
-    enabled: submitted.assetType === 'stock',
-    queryFn: () => getStockValuation(submitted.code),
-    queryKey: ['stock-valuation', submitted.code],
+    enabled: submitted?.assetType === 'stock',
+    queryFn: () => getStockValuation(submitted!.code),
+    queryKey: ['stock-valuation', submitted?.code],
   })
 
   const fundNavQuery = useQuery({
-    enabled: submitted.assetType === 'fund',
-    queryFn: () => getFundNav(submitted.code, submitted.start, submitted.end),
+    enabled: submitted?.assetType === 'fund',
+    queryFn: () => getFundNav(submitted!.code, submitted!.start, submitted!.end),
     queryKey: ['fund-nav', submitted],
   })
 
   const chartOption = useMemo<EChartsOption>(() => {
+    const submittedAssetType = submitted?.assetType ?? assetType
     const rows =
-      submitted.assetType === 'stock'
+      submittedAssetType === 'stock'
         ? (stockHistoryQuery.data?.items ?? []).map((item) => [item.date, item.close])
         : (fundNavQuery.data?.items ?? []).map((item) => [item.date, item.unit_nav])
 
@@ -138,7 +139,7 @@ export function DashboardPage() {
         {
           areaStyle: { color: 'rgba(15, 118, 110, 0.08)' },
           data: rows,
-          name: submitted.assetType === 'stock' ? 'close' : 'unit nav',
+          name: submittedAssetType === 'stock' ? 'close' : 'unit nav',
           showSymbol: false,
           smooth: true,
           type: 'line',
@@ -157,12 +158,12 @@ export function DashboardPage() {
         type: 'value',
       },
     }
-  }, [fundNavQuery.data?.items, stockHistoryQuery.data?.items, submitted.assetType])
+  }, [assetType, fundNavQuery.data?.items, stockHistoryQuery.data?.items, submitted?.assetType])
 
   const result = analysisQuery.data ?? chatAnalysis ?? undefined
   const currentAssetLabel = formatAssetLabel(
-    result?.name ?? submitted.name,
-    result?.code ?? submitted.code,
+    result?.name ?? submitted?.name ?? selectedAssetName,
+    result?.code ?? submitted?.code ?? code,
   )
   const isBusy =
     isResolving ||
@@ -271,11 +272,13 @@ export function DashboardPage() {
                 code: result.code,
                 name: result.name,
               }
-            : {
-                asset_type: submitted.assetType,
-                code: submitted.code,
-                name: submitted.name,
-              },
+            : submitted
+              ? {
+                  asset_type: submitted.assetType,
+                  code: submitted.code,
+                  name: submitted.name,
+                }
+              : null,
           end: end || undefined,
           message,
           start,
@@ -493,6 +496,7 @@ export function DashboardPage() {
           <TabsTrigger value="analysis">分析</TabsTrigger>
           <TabsTrigger value="prices">行情</TabsTrigger>
           <TabsTrigger value="valuation">估值</TabsTrigger>
+          <TabsTrigger value="holdings">持仓</TabsTrigger>
           <TabsTrigger value="nav">净值</TabsTrigger>
         </TabsList>
         <TabsContent value="analysis">
@@ -509,6 +513,9 @@ export function DashboardPage() {
         </TabsContent>
         <TabsContent value="valuation">
           <StockValuationTable rows={stockValuationQuery.data?.items ?? []} />
+        </TabsContent>
+        <TabsContent value="holdings">
+          <FundHoldingsTable result={result} />
         </TabsContent>
         <TabsContent value="nav">
           <FundNavTable rows={fundNavQuery.data?.items ?? []} />
@@ -663,6 +670,24 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
       value: formatRatioPercentile(valuation?.pb_percentile),
       visible: result?.asset_type !== 'fund',
     },
+    {
+      icon: <Activity className="size-4 text-accent" />,
+      label: '持仓加权 PE',
+      value: formatNumber(valuation?.portfolio?.metrics?.weighted_pe_ttm?.value),
+      visible: result?.asset_type === 'fund',
+    },
+    {
+      icon: <Activity className="size-4 text-accent" />,
+      label: '持仓加权 PB',
+      value: formatNumber(valuation?.portfolio?.metrics?.weighted_pb?.value),
+      visible: result?.asset_type === 'fund',
+    },
+    {
+      icon: <Database className="size-4 text-accent" />,
+      label: '已分析持仓',
+      value: formatPercent(valuation?.holdings?.analyzed_holdings_weight, 1),
+      visible: result?.asset_type === 'fund',
+    },
   ].filter((item) => item.visible !== false)
 
   return (
@@ -738,6 +763,74 @@ function StockHistoryTable({ rows }: { rows: Array<{ date: string; close: number
                   <TableCell>{formatNumber(row.volume, 0)}</TableCell>
                 </TableRow>
               ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  )
+}
+
+function FundHoldingsTable({ result }: { result: AnalysisResult | undefined }) {
+  const holdings = result?.valuation.holdings
+  const rows = holdings?.items ?? []
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3">
+        <CardTitle>前十大持仓增强</CardTitle>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Badge variant="outline">报告期 {holdings?.report_date ?? '—'}</Badge>
+          <Badge variant="secondary">
+            已分析 {holdings?.analyzed_count ?? 0}/{holdings?.count ?? 0}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>序号</TableHead>
+              <TableHead>股票</TableHead>
+              <TableHead>权重</TableHead>
+              <TableHead>行业</TableHead>
+              <TableHead>PE TTM</TableHead>
+              <TableHead>PB</TableHead>
+              <TableHead>ROE</TableHead>
+              <TableHead>利润增速</TableHead>
+              <TableHead>股息率</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length ? (
+              rows.map((row) => (
+                <TableRow key={`${row.rank}-${row.code}`}>
+                  <TableCell>{row.rank}</TableCell>
+                  <TableCell>
+                    <div className="min-w-32 font-medium">{row.name}</div>
+                    <div className="text-xs text-muted-foreground">{row.code}</div>
+                  </TableCell>
+                  <TableCell>{formatPercent(row.weight_pct == null ? null : row.weight_pct / 100)}</TableCell>
+                  <TableCell>{row.industry ?? '—'}</TableCell>
+                  <TableCell>{formatNumber(row.pe_ttm)}</TableCell>
+                  <TableCell>{formatNumber(row.pb)}</TableCell>
+                  <TableCell>{formatPercent(row.roe_weighted == null ? null : row.roe_weighted / 100)}</TableCell>
+                  <TableCell>
+                    {formatPercent(
+                      row.parent_netprofit_growth_pct == null
+                        ? null
+                        : row.parent_netprofit_growth_pct / 100,
+                    )}
+                  </TableCell>
+                  <TableCell>{formatPercent(row.dividend_yield)}</TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell className="h-24 text-center text-muted-foreground" colSpan={9}>
+                  当前标的没有可用的股票持仓披露。
+                </TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </CardContent>

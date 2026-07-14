@@ -51,6 +51,71 @@ class StockValuationPoint:
 
 
 @dataclass(frozen=True)
+class StockProfile:
+    code: str
+    name: str | None
+    em_industry: str | None
+    csrc_industry: str | None
+    security_type: str | None
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StockFinancialIndicator:
+    date: date
+    report_type: str | None
+    roe_weighted: float | None
+    roe_deducted_weighted: float | None
+    parent_netprofit_growth_pct: float | None
+    revenue_growth_pct: float | None
+    gross_margin_pct: float | None
+    net_margin_pct: float | None
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StockPeerComparison:
+    code: str
+    name: str
+    rank: int | None
+    pe_ttm: float | None
+    pb_mrq: float | None
+    peg: float | None
+    roe_avg: float | None
+    net_profit_growth_ttm: float | None
+    revenue_growth_ttm: float | None
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StockDividendPlan:
+    notice_date: date | None
+    plan: str | None
+    progress: str | None
+    ex_dividend_date: date | None
+    cash_per_share: float | None
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StockDividendSummary:
+    year: str
+    total_dividend: float | None
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FundHolding:
+    rank: int
+    code: str
+    name: str
+    weight_pct: float | None
+    shares_10k: float | None
+    market_value_10k: float | None
+    report_date: date | None
+
+
+@dataclass(frozen=True)
 class FundNavPoint:
     date: date
     unit_nav: float | None

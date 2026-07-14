@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Any
 
-from market_lens.data.eastmoney import EastmoneyClient
+from market_lens.data.eastmoney import (
+    EastmoneyClient,
+    EastmoneyError,
+    is_a_share_symbol,
+    stock_bars_from_valuations,
+)
+from market_lens.types import FundHolding
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.framework import analyze_index_price_proxy
 
@@ -22,32 +29,87 @@ class MarketAnalysisAgent:
         end: date,
     ) -> dict[str, Any]:
         if asset_type == "stock":
-            bars = self.data_client.get_stock_history(code, start=start, end=end)
+            all_valuations = self.data_client.get_stock_valuation(code)
+            stock_name = next((item.name for item in reversed(all_valuations) if item.name), None)
+            valuations = [item for item in all_valuations if start <= item.date <= end]
+            try:
+                bars = self.data_client.get_stock_history(code, start=start, end=end)
+            except EastmoneyError:
+                bars = stock_bars_from_valuations(valuations)
             if not bars:
                 raise ValueError(
                     f"No stock price data found for {code}. "
                     "If this is a fund code, choose asset_type='fund'."
                 )
-            all_valuations = self.data_client.get_stock_valuation(code)
-            stock_name = next((item.name for item in reversed(all_valuations) if item.name), None)
-            valuations = [item for item in all_valuations if start <= item.date <= end]
-            return analyze_stock(code, bars, valuations, name=stock_name)
+            profile = None
+            financials = []
+            peers = {}
+            dividends = {}
+            try:
+                profile = self.data_client.get_stock_profile(code)
+            except EastmoneyError:
+                pass
+            try:
+                financials = self.data_client.get_stock_financial_indicators(code)
+            except EastmoneyError:
+                pass
+            try:
+                peers = self.data_client.get_stock_peer_comparison(code)
+            except EastmoneyError:
+                pass
+            try:
+                dividends = self.data_client.get_stock_dividends(code)
+            except EastmoneyError:
+                pass
+            return analyze_stock(
+                code,
+                bars,
+                valuations,
+                name=stock_name,
+                profile=profile,
+                financials=financials,
+                peers=peers,
+                dividends=dividends,
+            )
         if asset_type == "fund":
-            nav_points = self.data_client.get_exchange_fund_price_nav(code, start=start, end=end)
+            try:
+                nav_points = self.data_client.get_exchange_fund_price_nav(
+                    code,
+                    start=start,
+                    end=end,
+                )
+            except EastmoneyError:
+                nav_points = []
             fund_data_source = "exchange_price_history" if nav_points else "fund_nav_history"
             if not nav_points:
                 nav_points = self.data_client.get_fund_nav(code, start=start, end=end)
             if not nav_points:
                 raise ValueError(f"No fund NAV data found for {code}.")
             fund_name = self.data_client.get_fund_name(code)
-            result = analyze_fund(code, nav_points, name=fund_name)
-            index_candidate = self.data_client.find_index_for_fund(fund_name or code)
+            try:
+                holdings = self.data_client.get_fund_holdings(code)
+            except EastmoneyError:
+                holdings = []
+            holding_analyses = self._analyze_fund_holdings(holdings, end=end)
+            result = analyze_fund(
+                code,
+                nav_points,
+                name=fund_name,
+                holdings=holdings,
+                holding_analyses=holding_analyses,
+            )
+            index_candidate = None
+            if result["valuation"].get("score") is None:
+                index_candidate = self.data_client.find_index_for_fund(fund_name or code)
             if index_candidate and index_candidate.quote_id:
-                index_bars = self.data_client.get_index_history(
-                    index_candidate.quote_id,
-                    start=start,
-                    end=end,
-                )
+                try:
+                    index_bars = self.data_client.get_index_history(
+                        index_candidate.quote_id,
+                        start=start,
+                        end=end,
+                    )
+                except EastmoneyError:
+                    index_bars = []
                 if index_bars:
                     result["valuation"] = analyze_index_price_proxy(
                         index_bars=index_bars,
@@ -68,3 +130,83 @@ class MarketAnalysisAgent:
                 )
             return result
         raise ValueError("asset_type must be 'stock' or 'fund'")
+
+    def _analyze_fund_holdings(
+        self,
+        holdings: list[FundHolding],
+        end: date,
+    ) -> dict[str, dict[str, Any]]:
+        supported = [item for item in holdings if is_supported_holding_stock(item.code)]
+        if not supported:
+            return {}
+
+        analyses: dict[str, dict[str, Any]] = {}
+        worker_count = min(4, len(supported))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(self._analyze_holding_stock, holding, end): holding.code
+                for holding in supported
+            }
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    analysis = future.result()
+                except (EastmoneyError, ValueError):
+                    continue
+                if analysis is not None:
+                    analyses[code] = analysis
+        return analyses
+
+    def _analyze_holding_stock(
+        self,
+        holding: FundHolding,
+        end: date,
+    ) -> dict[str, Any] | None:
+        valuations = [
+            item for item in self.data_client.get_stock_valuation(holding.code) if item.date <= end
+        ]
+        bars = stock_bars_from_valuations(valuations)
+        if not bars:
+            return None
+
+        profile = None
+        financials = []
+        peers = {}
+        dividends = {}
+        try:
+            profile = self.data_client.get_stock_profile(holding.code)
+        except EastmoneyError:
+            pass
+        try:
+            financials = [
+                item
+                for item in self.data_client.get_stock_financial_indicators(holding.code)
+                if item.date <= end
+            ]
+        except EastmoneyError:
+            pass
+        try:
+            peers = self.data_client.get_stock_peer_comparison(holding.code)
+        except EastmoneyError:
+            pass
+        try:
+            dividends = self.data_client.get_stock_dividends(holding.code)
+        except EastmoneyError:
+            pass
+        return analyze_stock(
+            holding.code,
+            bars,
+            valuations,
+            name=holding.name,
+            profile=profile,
+            financials=financials,
+            peers=peers,
+            dividends=dividends,
+        )
+
+
+def is_supported_holding_stock(code: str) -> bool:
+    try:
+        return is_a_share_symbol(code)
+    except ValueError:
+        return False

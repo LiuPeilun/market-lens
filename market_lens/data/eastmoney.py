@@ -16,8 +16,14 @@ from market_lens.storage.sqlite_cache import SQLiteCache
 from market_lens.types import (
     AssetSearchResult,
     AssetType,
+    FundHolding,
     FundNavPoint,
     StockBar,
+    StockDividendPlan,
+    StockDividendSummary,
+    StockFinancialIndicator,
+    StockPeerComparison,
+    StockProfile,
     StockValuationPoint,
 )
 
@@ -126,11 +132,96 @@ class EastmoneyClient:
         points = [parse_stock_valuation_row(row) for row in rows]
         return sorted(points, key=lambda item: item.date)
 
+    def get_stock_profile(self, symbol: str) -> StockProfile | None:
+        code = f10_stock_code(symbol)
+        url = (
+            "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax?"
+            + urlencode({"code": code})
+        )
+        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+        rows = payload.get("jbzl") or []
+        if not rows:
+            return None
+        return parse_stock_profile(rows[0])
+
+    def get_stock_financial_indicators(
+        self,
+        symbol: str,
+        report_type: int = 1,
+    ) -> list[StockFinancialIndicator]:
+        code = f10_stock_code(symbol)
+        url = (
+            "https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew?"
+            + urlencode({"type": str(report_type), "code": code})
+        )
+        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+        rows = payload.get("data") or []
+        return sorted(
+            (parse_stock_financial_indicator(row) for row in rows),
+            key=lambda item: item.date,
+        )
+
+    def get_stock_peer_comparison(self, symbol: str) -> dict[str, list[StockPeerComparison]]:
+        code = f10_stock_code(symbol)
+        url = (
+            "https://emweb.securities.eastmoney.com/PC_HSF10/IndustryAnalysis/PageAjax?"
+            + urlencode({"code": code})
+        )
+        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+        return {
+            "valuation": [
+                parse_stock_peer_comparison(row)
+                for row in (payload.get("gzbj") or [])
+                if parse_stock_peer_comparison(row) is not None
+            ],
+            "growth": [
+                parse_stock_peer_comparison(row)
+                for row in (payload.get("czxbj") or [])
+                if parse_stock_peer_comparison(row) is not None
+            ],
+            "dupont": [
+                parse_stock_peer_comparison(row)
+                for row in (payload.get("dbfxbj") or [])
+                if parse_stock_peer_comparison(row) is not None
+            ],
+        }
+
+    def get_stock_dividends(
+        self,
+        symbol: str,
+    ) -> dict[str, list[StockDividendPlan] | list[StockDividendSummary]]:
+        code = f10_stock_code(symbol)
+        url = (
+            "https://emweb.securities.eastmoney.com/PC_HSF10/BonusFinancing/PageAjax?"
+            + urlencode({"code": code})
+        )
+        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+        return {
+            "plans": [parse_stock_dividend_plan(row) for row in (payload.get("fhyx") or [])],
+            "summaries": [
+                parse_stock_dividend_summary(row) for row in (payload.get("lnfhrz") or [])
+            ],
+        }
+
     def get_fund_name(self, code: str) -> str | None:
         normalized_code = normalize_fund_code(code)
         url = f"https://fund.eastmoney.com/pingzhongdata/{normalized_code}.js"
         text = self._get_text(url, ttl_seconds=24 * 60 * 60)
         return parse_pingzhongdata_fund_name(text)
+
+    def get_fund_holdings(self, code: str, top_n: int = 10) -> list[FundHolding]:
+        normalized_code = normalize_fund_code(code)
+        params = {
+            "type": "jjcc",
+            "code": normalized_code,
+            "topline": str(top_n),
+            "year": "",
+            "month": "",
+        }
+        url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?" + urlencode(params)
+        text = self._get_text(url, ttl_seconds=24 * 60 * 60)
+        content = parse_fund_archives_content(text)
+        return parse_fund_holdings_table(content)[:top_n]
 
     def get_fund_nav(
         self,
@@ -332,6 +423,7 @@ class EastmoneyClient:
                     headers=self._headers_for_url(url),
                     follow_redirects=True,
                     http2=False,
+                    trust_env=False,
                 ) as client:
                     response = client.get(url)
                     response.raise_for_status()
@@ -366,9 +458,42 @@ class EastmoneyClient:
             headers["Referer"] = "https://fund.eastmoney.com/"
         elif host == "datacenter-web.eastmoney.com":
             headers["Referer"] = "https://data.eastmoney.com/"
+        elif host == "emweb.securities.eastmoney.com":
+            headers["Referer"] = "https://emweb.securities.eastmoney.com/"
         elif host == "searchapi.eastmoney.com":
             headers["Referer"] = "https://quote.eastmoney.com/"
         return headers
+
+
+def stock_bars_from_valuations(rows: list[StockValuationPoint]) -> list[StockBar]:
+    bars: list[StockBar] = []
+    previous_close: float | None = None
+    for row in sorted(rows, key=lambda item: item.date):
+        if row.close is None:
+            continue
+        change_amount = row.close - previous_close if previous_close is not None else None
+        change_pct = (
+            change_amount / previous_close * 100
+            if previous_close not in (None, 0) and change_amount is not None
+            else None
+        )
+        bars.append(
+            StockBar(
+                date=row.date,
+                open=row.close,
+                close=row.close,
+                high=row.close,
+                low=row.close,
+                volume=0,
+                amount=0,
+                amplitude_pct=None,
+                change_pct=change_pct,
+                change_amount=change_amount,
+                turnover_pct=None,
+            )
+        )
+        previous_close = row.close
+    return bars
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -395,6 +520,13 @@ def infer_secid(symbol: str) -> str:
     if code.startswith(("5", "6", "9")):
         return f"1.{code}"
     return f"0.{code}"
+
+
+def f10_stock_code(symbol: str) -> str:
+    code = normalize_symbol(symbol)
+    if code.startswith(("5", "6", "9")):
+        return f"SH{code}"
+    return f"SZ{code}"
 
 
 def infer_exchange_fund_secid(code: str) -> str | None:
@@ -436,6 +568,15 @@ def iso_date(value: date) -> str:
 
 def parse_date(value: str) -> date:
     return datetime.strptime(value[:10], "%Y-%m-%d").date()
+
+
+def parse_optional_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return parse_date(str(value))
+    except ValueError:
+        return None
 
 
 def to_float(value: Any) -> float | None:
@@ -502,6 +643,79 @@ def parse_stock_valuation_row(row: dict[str, Any]) -> StockValuationPoint:
         peg=to_float(row.get("PEG_CAR")),
         raw=row,
     )
+
+
+def parse_stock_profile(row: dict[str, Any]) -> StockProfile:
+    return StockProfile(
+        code=str(row.get("SECURITY_CODE") or ""),
+        name=repair_mojibake(row.get("SECURITY_NAME_ABBR")),
+        em_industry=repair_mojibake(row.get("EM2016")),
+        csrc_industry=repair_mojibake(row.get("INDUSTRYCSRC1")),
+        security_type=repair_mojibake(row.get("SECURITY_TYPE")),
+        raw=row,
+    )
+
+
+def parse_stock_financial_indicator(row: dict[str, Any]) -> StockFinancialIndicator:
+    return StockFinancialIndicator(
+        date=parse_date(str(row["REPORT_DATE"])),
+        report_type=repair_mojibake(row.get("REPORT_TYPE")),
+        roe_weighted=to_float(row.get("ROEJQ")),
+        roe_deducted_weighted=to_float(row.get("ROEKCJQ")),
+        parent_netprofit_growth_pct=to_float(row.get("PARENTNETPROFITTZ")),
+        revenue_growth_pct=to_float(row.get("TOTALOPERATEREVETZ")),
+        gross_margin_pct=to_float(row.get("XSMLL")),
+        net_margin_pct=to_float(row.get("XSJLL")),
+        raw=row,
+    )
+
+
+def parse_stock_peer_comparison(row: dict[str, Any]) -> StockPeerComparison | None:
+    code = str(row.get("CORRE_SECURITY_CODE") or row.get("SECURITY_CODE") or "")
+    name = repair_mojibake(row.get("CORRE_SECURITY_NAME")) or code
+    if name in {"行业平均", "行业中值"} or code in {"行业平均", "行业中值"}:
+        return None
+    return StockPeerComparison(
+        code=code,
+        name=name,
+        rank=int(row["PAIMING"]) if str(row.get("PAIMING") or "").isdigit() else None,
+        pe_ttm=to_float(row.get("PE_TTM")),
+        pb_mrq=to_float(row.get("PB_MRQ")),
+        peg=to_float(row.get("PEG")),
+        roe_avg=to_float(row.get("ROE_AVG")),
+        net_profit_growth_ttm=to_float(row.get("JLRTTM")),
+        revenue_growth_ttm=to_float(row.get("YYSRTTM")),
+        raw=row,
+    )
+
+
+def parse_stock_dividend_plan(row: dict[str, Any]) -> StockDividendPlan:
+    plan = repair_mojibake(row.get("IMPL_PLAN_PROFILE"))
+    return StockDividendPlan(
+        notice_date=parse_optional_date(row.get("NOTICE_DATE")),
+        plan=plan,
+        progress=repair_mojibake(row.get("ASSIGN_PROGRESS")),
+        ex_dividend_date=parse_optional_date(row.get("EX_DIVIDEND_DATE")),
+        cash_per_share=parse_cash_per_share(plan),
+        raw=row,
+    )
+
+
+def parse_stock_dividend_summary(row: dict[str, Any]) -> StockDividendSummary:
+    return StockDividendSummary(
+        year=str(row.get("STATISTICS_YEAR") or ""),
+        total_dividend=to_float(row.get("TOTAL_DIVIDEND")),
+        raw=row,
+    )
+
+
+def parse_cash_per_share(plan: str | None) -> float | None:
+    if not plan:
+        return None
+    match = re.search(r"10\s*派\s*([0-9.]+)\s*元", plan)
+    if not match:
+        return None
+    return float(match.group(1)) / 10
 
 
 def parse_asset_search_row(row: dict[str, Any]) -> AssetSearchResult | None:
@@ -636,6 +850,49 @@ def parse_pingzhongdata_fund_name(text: str) -> str | None:
     return repair_mojibake(match.group(1))
 
 
+def parse_fund_archives_content(text: str) -> str:
+    match = re.search(
+        r"var\s+apidata\s*=\s*\{\s*content:\"(.*)\",arryear:",
+        text,
+        re.S,
+    )
+    if not match:
+        raise EastmoneyError("Unexpected Tiantian Fund holdings response")
+    content = match.group(1)
+    try:
+        content = json.loads(f'"{content}"')
+    except json.JSONDecodeError:
+        content = content.replace(r'\"', '"').replace(r"\/", "/")
+    return unescape(content)
+
+
+def parse_fund_holdings_table(content: str) -> list[FundHolding]:
+    parser = FundHoldingsHTMLParser.parse(content)
+    report_date_match = re.search(r"截止至：\s*(\d{4}-\d{2}-\d{2})", parser.text)
+    report_date = (
+        parse_optional_date(report_date_match.group(1)) if report_date_match else None
+    )
+    holdings: list[FundHolding] = []
+    for cells in parser.rows:
+        if len(cells) < 9 or not cells[0].isdigit():
+            continue
+        code = re.sub(r"\D", "", cells[1])
+        if not code:
+            continue
+        holdings.append(
+            FundHolding(
+                rank=int(cells[0]),
+                code=code,
+                name=repair_mojibake(cells[2]) or cells[2],
+                weight_pct=to_float(cells[6]),
+                shares_10k=to_float(cells[7]),
+                market_value_10k=to_float(cells[8]),
+                report_date=report_date,
+            )
+        )
+    return sorted(holdings, key=lambda item: item.rank)
+
+
 def parse_fund_nav_table(content: str) -> list[FundNavPoint]:
     table_rows = FundNavHTMLParser.parse(content)
     rows: list[FundNavPoint] = []
@@ -677,6 +934,48 @@ class FundNavHTMLParser(HTMLParser):
             self._current_cell = []
 
     def handle_data(self, data: str) -> None:
+        if self._in_td:
+            self._current_cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "td" and self._in_td:
+            self._current_row.append("".join(self._current_cell).strip())
+            self._current_cell = []
+            self._in_td = False
+        elif tag == "tr" and self._current_row:
+            self.rows.append(self._current_row)
+
+
+class FundHoldingsHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._in_td = False
+        self._current_cell: list[str] = []
+        self._current_row: list[str] = []
+        self.rows: list[list[str]] = []
+        self._text: list[str] = []
+
+    @classmethod
+    def parse(cls, html: str) -> FundHoldingsHTMLParser:
+        parser = cls()
+        parser.feed(html)
+        return parser
+
+    @property
+    def text(self) -> str:
+        return "".join(self._text)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        if tag == "tr":
+            self._current_row = []
+        elif tag == "td":
+            self._in_td = True
+            self._current_cell = []
+
+    def handle_data(self, data: str) -> None:
+        self._text.append(data)
         if self._in_td:
             self._current_cell.append(data)
 

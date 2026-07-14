@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from market_lens.types import StockBar, StockValuationPoint
+from market_lens.types import FundHolding, FundNavPoint, StockBar, StockValuationPoint
 from market_lens.valuation.framework import (
     analyze_fund_valuation,
     analyze_index_price_proxy,
@@ -87,6 +87,67 @@ def test_analyze_fund_valuation_framework_marks_pending_inputs() -> None:
     assert result["score"] is None
     assert result["level"] == "unknown"
     assert "dividend_yield" in result["missing_factors"]
+
+
+def test_analyze_fund_valuation_aggregates_holdings_and_confidence() -> None:
+    nav_points = [
+        FundNavPoint(
+            date=date(2026, 4, day),
+            unit_nav=1 + day / 100,
+            cumulative_nav=None,
+            daily_growth_pct=None,
+            subscribe_status=None,
+            redeem_status=None,
+        )
+        for day in range(1, 29)
+    ]
+    holdings = [
+        FundHolding(
+            rank=1,
+            code="000651",
+            name="格力电器",
+            weight_pct=10.0,
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2026, 3, 31),
+        )
+    ]
+    analyses = {
+        "000651": {
+            "valuation": {
+                "pe_ttm": 8.0,
+                "pb": 2.0,
+                "pe_ttm_percentile": 0.8,
+                "pb_percentile": 0.6,
+                "industry": {"em_industry": "家电"},
+                "fundamentals": {
+                    "roe_weighted": 20.0,
+                    "parent_netprofit_growth_pct": 8.0,
+                    "revenue_growth_pct": 5.0,
+                },
+                "peer_comparison": {
+                    "valuation": {"percentiles": {"pe_ttm": 0.7}}
+                },
+                "dividend": {"dividend_yield": 0.04},
+            }
+        }
+    }
+
+    result = analyze_fund_valuation(
+        nav_points,
+        name="中证红利低波ETF",
+        holdings=holdings,
+        holding_analyses=analyses,
+    )
+
+    assert result["method"] == "holdings_weighted_multi_factor"
+    assert result["status"] == "holdings_valuation"
+    assert result["score"] == 54.83
+    assert result["level"] == "fair"
+    assert result["confidence"] == 0.1
+    assert result["holdings"]["analyzed_holdings_weight"] == 0.1
+    assert result["portfolio"]["metrics"]["roe_weighted"]["value"] == 20.0
+    assert result["portfolio"]["industry_weights"][0]["industry"] == "家电"
 
 
 def test_analyze_index_price_proxy() -> None:

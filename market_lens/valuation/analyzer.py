@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import timedelta
 from typing import Any
 
-from market_lens.types import FundNavPoint, StockBar, StockValuationPoint
+from market_lens.types import (
+    FundHolding,
+    FundNavPoint,
+    StockBar,
+    StockDividendPlan,
+    StockDividendSummary,
+    StockFinancialIndicator,
+    StockPeerComparison,
+    StockProfile,
+    StockValuationPoint,
+)
 from market_lens.valuation.framework import analyze_fund_valuation, analyze_stock_valuation
 from market_lens.valuation.metrics import (
     annualized_return,
@@ -20,9 +31,17 @@ def analyze_stock(
     bars: list[StockBar],
     valuations: list[StockValuationPoint],
     name: str | None = None,
+    profile: StockProfile | None = None,
+    financials: list[StockFinancialIndicator] | None = None,
+    peers: dict[str, list[StockPeerComparison]] | None = None,
+    dividends: dict[str, list[StockDividendPlan] | list[StockDividendSummary]] | None = None,
 ) -> dict[str, Any]:
     latest_bar = bars[-1] if bars else None
     latest_valuation = valuations[-1] if valuations else None
+    financials = financials or []
+    peers = peers or {}
+    dividends = dividends or {}
+    latest_financial = financials[-1] if financials else None
 
     pe_percentile = percentile_rank(
         [item.pe_ttm for item in valuations],
@@ -41,6 +60,36 @@ def analyze_stock(
         annualized = annualized_return(bars[0].close, bars[-1].close, bars[0].date, bars[-1].date)
 
     valuation_framework = analyze_stock_valuation(valuations)
+    peer_summary = summarize_peer_comparison(symbol, peers)
+    dividend_summary = summarize_dividends(
+        plans=[item for item in dividends.get("plans", []) if isinstance(item, StockDividendPlan)],
+        summaries=[
+            item
+            for item in dividends.get("summaries", [])
+            if isinstance(item, StockDividendSummary)
+        ],
+        latest_price=latest_bar.close if latest_bar else None,
+        as_of=latest_bar.date if latest_bar else None,
+    )
+    fundamental_summary = {
+        "as_of": latest_financial.date.isoformat() if latest_financial else None,
+        "report_type": latest_financial.report_type if latest_financial else None,
+        "roe_weighted": latest_financial.roe_weighted if latest_financial else None,
+        "roe_deducted_weighted": (
+            latest_financial.roe_deducted_weighted if latest_financial else None
+        ),
+        "parent_netprofit_growth_pct": (
+            latest_financial.parent_netprofit_growth_pct if latest_financial else None
+        ),
+        "revenue_growth_pct": latest_financial.revenue_growth_pct if latest_financial else None,
+        "gross_margin_pct": latest_financial.gross_margin_pct if latest_financial else None,
+        "net_margin_pct": latest_financial.net_margin_pct if latest_financial else None,
+    }
+    industry_summary = {
+        "em_industry": profile.em_industry if profile else None,
+        "csrc_industry": profile.csrc_industry if profile else None,
+        "security_type": profile.security_type if profile else None,
+    }
 
     return {
         "asset_type": "stock",
@@ -56,6 +105,10 @@ def analyze_stock(
             "pb_percentile": pb_percentile,
             "pe_ttm_label": valuation_label(pe_percentile),
             "pb_label": valuation_label(pb_percentile),
+            "industry": industry_summary,
+            "fundamentals": fundamental_summary,
+            "peer_comparison": peer_summary,
+            "dividend": dividend_summary,
             **valuation_framework,
         },
         "performance": {
@@ -70,13 +123,103 @@ def analyze_stock(
         "notes": [
             "Stock valuation history may not cover a full 10 years for every symbol.",
             "Composite valuation score is based on available historical valuation percentiles.",
-            (
-                "Industry-relative valuation, dividend yield, ROE, "
-                "and growth quality are planned inputs."
-            ),
+            "Stock fundamentals and peer comparison are sourced from Eastmoney F10 when available.",
             "This is a research summary, not investment advice.",
         ],
         "latest_raw": asdict(latest_valuation) if latest_valuation else None,
+    }
+
+
+def summarize_peer_comparison(
+    symbol: str,
+    peers: dict[str, list[StockPeerComparison]],
+) -> dict[str, Any]:
+    return {
+        "valuation": summarize_peer_table(
+            symbol,
+            peers.get("valuation", []),
+            {
+                "pe_ttm": "pe_ttm",
+                "pb_mrq": "pb_mrq",
+                "peg": "peg",
+            },
+        ),
+        "growth": summarize_peer_table(
+            symbol,
+            peers.get("growth", []),
+            {
+                "net_profit_growth_ttm": "net_profit_growth_ttm",
+                "revenue_growth_ttm": "revenue_growth_ttm",
+            },
+        ),
+        "dupont": summarize_peer_table(
+            symbol,
+            peers.get("dupont", []),
+            {
+                "roe_avg": "roe_avg",
+            },
+        ),
+    }
+
+
+def summarize_peer_table(
+    symbol: str,
+    rows: list[StockPeerComparison],
+    fields: dict[str, str],
+) -> dict[str, Any]:
+    target = next((item for item in rows if item.code == symbol), None)
+    values: dict[str, Any] = {
+        "sample_size": len(rows),
+        "rank": target.rank if target else None,
+        "target": asdict(target) if target else None,
+        "percentiles": {},
+    }
+    for output_key, attr in fields.items():
+        current = getattr(target, attr, None) if target else None
+        values["percentiles"][output_key] = percentile_rank(
+            [getattr(item, attr, None) for item in rows],
+            current,
+        )
+    return values
+
+
+def summarize_dividends(
+    plans: list[StockDividendPlan],
+    summaries: list[StockDividendSummary],
+    latest_price: float | None,
+    as_of: Any,
+) -> dict[str, Any]:
+    trailing_cash = None
+    if as_of is not None:
+        start_date = as_of - timedelta(days=365)
+        cash_values = [
+            item.cash_per_share
+            for item in plans
+            if item.cash_per_share is not None
+            and item.ex_dividend_date is not None
+            and start_date <= item.ex_dividend_date <= as_of
+        ]
+        if cash_values:
+            trailing_cash = sum(cash_values)
+
+    dividend_yield = (
+        trailing_cash / latest_price if trailing_cash is not None and latest_price else None
+    )
+    return {
+        "trailing_12m_cash_per_share": trailing_cash,
+        "dividend_yield": dividend_yield,
+        "latest_plan": serialize_dividend_plan(plans[0]) if plans else None,
+        "latest_year_summary": asdict(summaries[0]) if summaries else None,
+    }
+
+
+def serialize_dividend_plan(plan: StockDividendPlan) -> dict[str, Any]:
+    return {
+        "notice_date": plan.notice_date.isoformat() if plan.notice_date else None,
+        "plan": plan.plan,
+        "progress": plan.progress,
+        "ex_dividend_date": plan.ex_dividend_date.isoformat() if plan.ex_dividend_date else None,
+        "cash_per_share": plan.cash_per_share,
     }
 
 
@@ -84,6 +227,8 @@ def analyze_fund(
     code: str,
     nav_points: list[FundNavPoint],
     name: str | None = None,
+    holdings: list[FundHolding] | None = None,
+    holding_analyses: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     latest = nav_points[-1] if nav_points else None
     nav_values = [item.unit_nav for item in nav_points]
@@ -114,11 +259,20 @@ def analyze_fund(
             "annualized_return_text": format_pct(annualized),
             "max_drawdown_text": format_pct(max_drawdown(nav_values)),
         },
-        "valuation": analyze_fund_valuation(nav_points, name=name),
+        "valuation": analyze_fund_valuation(
+            nav_points,
+            name=name,
+            holdings=holdings,
+            holding_analyses=holding_analyses,
+        ),
         "notes": [
             "Fund NAV performance is not the same as holding-level valuation.",
-            "Fund valuation needs holdings, index mapping, and weighted valuation factors.",
-            "Dividend low-volatility funds need dividend yield and volatility factors.",
+            (
+                "Holding-level valuation uses the latest disclosed top holdings "
+                "and their reported weights."
+            ),
+            "ROE and growth are quality context; they are not treated as cheapness scores.",
+            "Low top-holdings coverage or an old report date lowers confidence.",
             "This is a research summary, not investment advice.",
         ],
     }

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
 from market_lens import __version__
@@ -17,7 +18,7 @@ from market_lens.api.schemas import (
     ChatRequest,
     ChatResponse,
 )
-from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError
+from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
 
 app = FastAPI(
     title="Market Lens API",
@@ -28,6 +29,11 @@ app = FastAPI(
 
 def get_client() -> EastmoneyClient:
     return EastmoneyClient()
+
+
+def to_sse_data(event: dict[str, Any]) -> str:
+    payload = jsonable_encoder(event)
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @app.get("/health")
@@ -45,14 +51,19 @@ def stock_history(
 ) -> dict[str, object]:
     client = get_client()
     try:
-        rows = client.get_stock_history(
-            symbol,
-            start=start,
-            end=end or date.today(),
-            period=period,
-            adjust=adjust,
-        )
         valuations = client.get_stock_valuation(symbol)
+        try:
+            rows = client.get_stock_history(
+                symbol,
+                start=start,
+                end=end or date.today(),
+                period=period,
+                adjust=adjust,
+            )
+        except EastmoneyError:
+            rows = stock_bars_from_valuations(
+                [item for item in valuations if start <= item.date <= (end or date.today())]
+            )
         stock_name = next((item.name for item in reversed(valuations) if item.name), None)
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -88,7 +99,10 @@ def fund_nav(
 ) -> dict[str, object]:
     client = get_client()
     try:
-        rows = client.get_exchange_fund_price_nav(code, start=start, end=end or date.today())
+        try:
+            rows = client.get_exchange_fund_price_nav(code, start=start, end=end or date.today())
+        except EastmoneyError:
+            rows = []
         data_source = "exchange_price_history" if rows else "fund_nav_history"
         if not rows:
             rows = client.get_fund_nav(code, start=start, end=end or date.today())
@@ -187,10 +201,13 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 start=request.start,
                 end=request.end or date.today(),
             ):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield to_sse_data(event)
         except (ValueError, EastmoneyError) as exc:
             payload = {"type": "error", "message": str(exc)}
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            yield to_sse_data(payload)
+        except Exception as exc:
+            payload = {"type": "error", "message": f"Chat stream failed: {exc}"}
+            yield to_sse_data(payload)
 
     return StreamingResponse(
         event_stream(),

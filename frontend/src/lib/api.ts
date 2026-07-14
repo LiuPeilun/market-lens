@@ -112,10 +112,38 @@ export interface AnalysisResult {
     profile?: string
     profile_name?: string
     factor_coverage?: number
+    holding_factor_coverage?: number
     missing_factors?: string[]
     required_future_data?: string[]
     method?: string
     status?: string
+    portfolio?: {
+      metrics?: Record<string, { value: number | null; coverage: number }>
+      industry_weights?: Array<{ industry: string; weight_pct: number }>
+    }
+    holdings?: {
+      report_date: string | null
+      report_age_days: number | null
+      count: number
+      analyzed_count: number
+      top_holdings_weight: number
+      analyzed_holdings_weight: number
+      items: Array<{
+        rank: number
+        code: string
+        name: string
+        weight_pct: number | null
+        shares_10k: number | null
+        market_value_10k: number | null
+        analysis_available: boolean
+        industry: string | null
+        pe_ttm: number | null
+        pb: number | null
+        roe_weighted: number | null
+        parent_netprofit_growth_pct: number | null
+        dividend_yield: number | null
+      }>
+    }
   }
   performance: {
     sample_size: number
