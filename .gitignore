@@ -9,6 +9,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .env
+.env.local
 frontend/.env.local
+frontend/.env.development.local
 _tmp_*
 .npmrc.*

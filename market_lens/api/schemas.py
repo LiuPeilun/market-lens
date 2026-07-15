@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +16,7 @@ class AnalyzeRequest(BaseModel):
 
 class AnalyzeResponse(BaseModel):
     result: dict[str, Any]
+    analysis_id: UUID | None = None
 
 
 class ChatAssetContext(BaseModel):
@@ -28,6 +30,7 @@ class ChatRequest(BaseModel):
     context: ChatAssetContext | None = None
     start: date
     end: date | None = None
+    session_id: UUID | None = None
 
 
 class ChatResponse(BaseModel):
@@ -37,6 +40,7 @@ class ChatResponse(BaseModel):
     analysis: dict[str, Any] | None = None
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    session_id: UUID | None = None
 
 
 class AssetSearchItem(BaseModel):

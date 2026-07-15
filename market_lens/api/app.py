@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 from datetime import date
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
 from market_lens import __version__
 from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext
 from market_lens.agent.market_agent import MarketAnalysisAgent
+from market_lens.api.auth import get_current_user
 from market_lens.api.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -18,7 +20,13 @@ from market_lens.api.schemas import (
     ChatRequest,
     ChatResponse,
 )
+from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
+from market_lens.storage.supabase import (
+    AuthenticatedUser,
+    SupabaseError,
+    SupabaseRepository,
+)
 
 app = FastAPI(
     title="Market Lens API",
@@ -31,14 +39,22 @@ def get_client() -> EastmoneyClient:
     return EastmoneyClient()
 
 
+def get_repository() -> SupabaseRepository:
+    return SupabaseRepository()
+
+
 def to_sse_data(event: dict[str, Any]) -> str:
     payload = jsonable_encoder(event)
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "version": __version__}
+def health() -> dict[str, str | bool]:
+    return {
+        "status": "ok",
+        "version": __version__,
+        "supabase_configured": settings.supabase_configured,
+    }
 
 
 @app.get("/api/stocks/{symbol}/history")
@@ -144,7 +160,10 @@ def search_assets(
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
-def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
+def analyze(
+    request: AnalyzeRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> AnalyzeResponse:
     agent = MarketAnalysisAgent()
     try:
         result = agent.analyze(
@@ -155,13 +174,25 @@ def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         )
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return AnalyzeResponse(result=result)
+    try:
+        row = get_repository().save_analysis(
+            user,
+            request_params=jsonable_encoder(request.model_dump()),
+            result=jsonable_encoder(result),
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return AnalyzeResponse(result=result, analysis_id=row.get("id"))
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> ChatResponse:
     client = get_client()
     agent = ChatAgent(data_client=client, analysis_agent=MarketAnalysisAgent(client))
+    repository = get_repository()
     context = None
     if request.context is not None:
         context = ChatAssetContext(
@@ -170,21 +201,44 @@ def chat(request: ChatRequest) -> ChatResponse:
             name=request.context.name,
         )
     try:
+        session = repository.ensure_chat_session(
+            user,
+            session_id=request.session_id,
+            title=request.message,
+        )
+        session_id = UUID(str(session["id"]))
         result = agent.reply(
             message=request.message,
             context=context,
             start=request.start,
             end=request.end or date.today(),
         )
+        analysis_id = save_chat_analysis(repository, user, request, result.get("analysis"))
+        repository.update_chat_session(user, session_id, result.get("asset"))
+        repository.save_chat_message(user, session_id, "user", request.message)
+        repository.save_chat_message(
+            user,
+            session_id,
+            "assistant",
+            result["answer"],
+            citations=result.get("citations"),
+            analysis_run_id=analysis_id,
+        )
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return ChatResponse(**result)
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return ChatResponse(**result, session_id=session_id)
 
 
 @app.post("/api/chat/stream")
-def chat_stream(request: ChatRequest) -> StreamingResponse:
+def chat_stream(
+    request: ChatRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> StreamingResponse:
     client = get_client()
     agent = ChatAgent(data_client=client, analysis_agent=MarketAnalysisAgent(client))
+    repository = get_repository()
     context = None
     if request.context is not None:
         context = ChatAssetContext(
@@ -193,7 +247,21 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
             name=request.context.name,
         )
 
+    try:
+        session = repository.ensure_chat_session(
+            user,
+            session_id=request.session_id,
+            title=request.message,
+        )
+        session_id = UUID(str(session["id"]))
+        repository.save_chat_message(user, session_id, "user", request.message)
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     def event_stream():
+        answer_parts: list[str] = []
+        citations: list[str] = []
+        analysis_id: str | None = None
         try:
             for event in agent.stream_reply(
                 message=request.message,
@@ -201,6 +269,28 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
                 start=request.start,
                 end=request.end or date.today(),
             ):
+                if event.get("type") == "meta":
+                    citations = event.get("citations") or []
+                    analysis_id = save_chat_analysis(
+                        repository,
+                        user,
+                        request,
+                        event.get("analysis"),
+                    )
+                    repository.update_chat_session(user, session_id, event.get("asset"))
+                    event["session_id"] = str(session_id)
+                elif event.get("type") == "token":
+                    answer_parts.append(str(event.get("delta") or ""))
+                elif event.get("type") == "done":
+                    repository.save_chat_message(
+                        user,
+                        session_id,
+                        "assistant",
+                        "".join(answer_parts),
+                        citations=citations,
+                        analysis_run_id=analysis_id,
+                    )
+                    event["session_id"] = str(session_id)
                 yield to_sse_data(event)
         except (ValueError, EastmoneyError) as exc:
             payload = {"type": "error", "message": str(exc)}
@@ -214,3 +304,62 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/history/analyses")
+def analysis_history(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> dict[str, Any]:
+    try:
+        items = get_repository().list_analyses(user, limit)
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/history/chat-sessions")
+def chat_session_history(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> dict[str, Any]:
+    try:
+        items = get_repository().list_chat_sessions(user, limit)
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/history/chat-sessions/{session_id}/messages")
+def chat_message_history(
+    session_id: UUID,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> dict[str, Any]:
+    try:
+        items = get_repository().list_chat_messages(user, session_id)
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"count": len(items), "items": items}
+
+
+def save_chat_analysis(
+    repository: SupabaseRepository,
+    user: AuthenticatedUser,
+    request: ChatRequest,
+    analysis: dict[str, Any] | None,
+) -> str | None:
+    if analysis is None:
+        return None
+    row = repository.save_analysis(
+        user,
+        request_params=jsonable_encoder(
+            {
+                "source": "chat",
+                "message": request.message,
+                "start": request.start,
+                "end": request.end,
+            }
+        ),
+        result=jsonable_encoder(analysis),
+    )
+    return str(row.get("id")) if row.get("id") else None

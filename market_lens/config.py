@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+load_dotenv(".env.local", override=True)
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,12 @@ class Settings:
     llm_api_key: str | None = os.getenv("MARKET_LENS_LLM_API_KEY") or None
     llm_timeout: float = float(os.getenv("MARKET_LENS_LLM_TIMEOUT", "60"))
     llm_enabled: bool = os.getenv("MARKET_LENS_LLM_ENABLED", "true").lower() == "true"
+    supabase_url: str | None = os.getenv("SUPABASE_URL") or None
+    supabase_publishable_key: str | None = os.getenv("SUPABASE_PUBLISHABLE_KEY") or None
+
+    @property
+    def supabase_configured(self) -> bool:
+        return bool(self.supabase_url and self.supabase_publishable_key)
 
 
 settings = Settings()
