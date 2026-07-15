@@ -1,7 +1,8 @@
 param(
     [string]$HostAddress = "127.0.0.1",
     [int]$BackendPort = 8001,
-    [int]$FrontendPort = 5173
+    [int]$FrontendPort = 5173,
+    [switch]$SkipSupabaseStart
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +42,22 @@ function Wait-HttpOk {
     } while ((Get-Date) -lt $deadline)
 
     return $false
+}
+
+if (-not $SkipSupabaseStart) {
+    $supabaseHealthUrl = "http://127.0.0.1:54321/auth/v1/health"
+    Write-Host "Checking local Supabase..."
+    if (-not (Wait-HttpOk -Url $supabaseHealthUrl -TimeoutSeconds 2)) {
+        Write-Host "Starting local Supabase..."
+        & npx supabase@latest start *> $null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Local Supabase failed to start. Run 'npx supabase@latest start' for details."
+        }
+    }
+    if (-not (Wait-HttpOk -Url $supabaseHealthUrl -TimeoutSeconds 30)) {
+        throw "Local Supabase did not become healthy within 30 seconds."
+    }
+    Write-Host "Local Supabase is ready: http://127.0.0.1:54321"
 }
 
 $backendPid = Test-PortListening -Port $BackendPort
