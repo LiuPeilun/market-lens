@@ -3,7 +3,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { EChartsOption } from 'echarts'
 import ReactECharts from 'echarts-for-react'
-import { Activity, Database, MessageCircle, Search, Send, Server, TrendingDown, TrendingUp } from 'lucide-react'
+import {
+  Activity,
+  Database,
+  History as HistoryIcon,
+  LogOut,
+  MessageCircle,
+  RotateCcw,
+  Search,
+  Send,
+  Server,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -33,6 +46,7 @@ import {
   searchAssets,
   streamChatWithAgent,
 } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
 import { formatLabel, formatNumber, formatPercent, formatRatioPercentile } from '@/lib/format'
 
 interface SubmittedQuery {
@@ -57,6 +71,7 @@ const defaultQuery: SubmittedQuery = {
 }
 
 export function DashboardPage() {
+  const { signOut, user } = useAuth()
   const [assetType, setAssetType] = useState<AssetType>(defaultQuery.assetType)
   const [code, setCode] = useState(defaultQuery.code)
   const [start, setStart] = useState(defaultQuery.start)
@@ -76,6 +91,7 @@ export function DashboardPage() {
   ])
   const [isChatBusy, setIsChatBusy] = useState(false)
   const [chatAnalysis, setChatAnalysis] = useState<AnalysisResult | null>(null)
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   const trimmedCode = code.trim()
 
   useEffect(() => {
@@ -281,10 +297,12 @@ export function DashboardPage() {
               : null,
           end: end || undefined,
           message,
+          session_id: chatSessionId,
           start,
         },
         (event) => {
           if (event.type === 'meta') {
+            if (event.session_id) setChatSessionId(event.session_id)
             setChatMessages((items) =>
               items.map((item) =>
                 item.id === assistantMessageId ? { ...item, citations: event.citations } : item,
@@ -336,6 +354,17 @@ export function DashboardPage() {
     }
   }
 
+  function startNewChat() {
+    setChatSessionId(null)
+    setChatMessages([
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: '已开始新对话，可以询问另一只基金或股票。',
+      },
+    ])
+  }
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-[1760px] flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
       <header className="flex flex-col gap-4 border-b pb-5 lg:flex-row lg:items-center lg:justify-between">
@@ -348,7 +377,7 @@ export function DashboardPage() {
           </div>
           <h1 className="text-2xl font-semibold tracking-normal sm:text-3xl">投研工作台</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Badge variant={healthQuery.data?.status === 'ok' ? 'secondary' : 'destructive'}>
             <Server className="mr-1 size-3" />
             API {healthQuery.data?.version ?? '—'}
@@ -357,6 +386,20 @@ export function DashboardPage() {
             <Database className="mr-1 size-3" />
             Eastmoney
           </Badge>
+          <Badge variant={healthQuery.data?.supabase_configured ? 'secondary' : 'destructive'}>
+            <Database className="mr-1 size-3" />
+            Supabase
+          </Badge>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/history">
+              <HistoryIcon className="size-4" />
+              历史记录
+            </Link>
+          </Button>
+          <span className="max-w-48 truncate text-xs text-muted-foreground">{user?.email}</span>
+          <Button onClick={() => void signOut()} size="icon" title="退出登录" variant="ghost">
+            <LogOut className="size-4" />
+          </Button>
         </div>
       </header>
 
@@ -488,6 +531,7 @@ export function DashboardPage() {
         isBusy={isChatBusy}
         messages={chatMessages}
         onChangeInput={setChatInput}
+        onNewChat={startNewChat}
         onSubmit={submitChat}
       />
 
@@ -530,21 +574,25 @@ function ChatPanel({
   isBusy,
   messages,
   onChangeInput,
+  onNewChat,
   onSubmit,
 }: {
   input: string
   isBusy: boolean
   messages: ChatMessage[]
   onChangeInput: (value: string) => void
+  onNewChat: () => void
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex-row items-center justify-between">
         <CardTitle className="flex items-center gap-2">
-          <MessageCircle className="size-4" />
-          智能问答
+          <MessageCircle className="size-4" /> 智能问答
         </CardTitle>
+        <Button onClick={onNewChat} size="icon" title="开始新对话" variant="ghost">
+          <RotateCcw className="size-4" />
+        </Button>
       </CardHeader>
       <CardContent className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="flex max-h-[360px] min-h-[260px] flex-col gap-3 overflow-auto rounded-md border bg-muted/30 p-3">

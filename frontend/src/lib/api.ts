@@ -1,3 +1,5 @@
+import { getAccessToken } from '@/lib/supabase'
+
 export type AssetType = 'stock' | 'fund'
 
 export interface AnalyzeRequest {
@@ -18,6 +20,7 @@ export interface ChatRequest {
   context?: ChatAssetContext | null
   start: string
   end?: string
+  session_id?: string | null
 }
 
 export interface ChatResponse {
@@ -27,6 +30,7 @@ export interface ChatResponse {
   analysis: AnalysisResult | null
   candidates: AssetSearchResult[]
   citations: string[]
+  session_id: string | null
 }
 
 export type ChatStreamEvent =
@@ -37,9 +41,10 @@ export type ChatStreamEvent =
       analysis: AnalysisResult | null
       candidates: AssetSearchResult[]
       citations: string[]
+      session_id?: string
     }
   | { type: 'token'; delta: string }
-  | { type: 'done' }
+  | { type: 'done'; session_id?: string }
   | { type: 'error'; message: string }
 
 export interface AssetSearchResult {
@@ -158,8 +163,10 @@ export interface AnalysisResult {
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const accessToken = await getAccessToken()
   const response = await fetch(url, {
     headers: {
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
       ...init?.headers,
     },
@@ -193,9 +200,11 @@ export async function streamChatWithAgent(
   payload: ChatRequest,
   onEvent: (event: ChatStreamEvent) => void,
 ) {
+  const accessToken = await getAccessToken()
   const response = await fetch('/api/chat/stream', {
     body: JSON.stringify(payload),
     headers: {
+      Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
     method: 'POST',
@@ -272,5 +281,52 @@ export function getFundNav(code: string, start: string, end?: string) {
 }
 
 export function getHealth() {
-  return requestJson<{ status: string; version: string }>('/health')
+  return requestJson<{ status: string; version: string; supabase_configured: boolean }>('/health')
+}
+
+export interface AnalysisHistoryItem {
+  id: string
+  asset_type: AssetType
+  asset_code: string
+  asset_name: string | null
+  request_params: Record<string, unknown>
+  result: AnalysisResult
+  created_at: string
+}
+
+export interface ChatSessionHistoryItem {
+  id: string
+  title: string
+  asset_type: AssetType | null
+  asset_code: string | null
+  asset_name: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatMessageHistoryItem {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  citations: string[]
+  analysis_run_id: string | null
+  created_at: string
+}
+
+export function getAnalysisHistory(limit = 30) {
+  return requestJson<{ count: number; items: AnalysisHistoryItem[] }>(
+    `/api/history/analyses?limit=${limit}`,
+  )
+}
+
+export function getChatSessionHistory(limit = 30) {
+  return requestJson<{ count: number; items: ChatSessionHistoryItem[] }>(
+    `/api/history/chat-sessions?limit=${limit}`,
+  )
+}
+
+export function getChatMessageHistory(sessionId: string) {
+  return requestJson<{ count: number; items: ChatMessageHistoryItem[] }>(
+    `/api/history/chat-sessions/${sessionId}/messages`,
+  )
 }
