@@ -28,9 +28,13 @@ project for personal research and local analysis. Do not treat generated output 
 ## Quick start
 
 ```powershell
+uv python install 3.12
 uv sync --dev
 copy .env.example .env
 ```
+
+The checked-in `.python-version` pins local development to CPython 3.12. This avoids SSL trust-store
+incompatibilities observed with some Conda Python/OpenSSL builds when importing the Daytona SDK.
 
 Configure the hosted Supabase project in the root `.env`:
 
@@ -201,9 +205,40 @@ non-root user, dropped Linux capabilities, `no-new-privileges`, and CPU, memory,
 artifact, and wall-clock limits. It mounts only a temporary read-only input directory and a temporary
 output directory. The repository, environment files, host shell, and Docker socket are not mounted.
 
-The Daytona runner is an interface-compatible placeholder and remains unavailable until its remote
-backend and credentials are configured. MCP integration is a later transport layer and does not
-bypass the tool policy or sandbox boundary.
+For production remote execution, create an API key in the Daytona dashboard and configure the
+Daytona backend:
+
+```dotenv
+MARKET_LENS_SANDBOX_BACKEND=daytona
+DAYTONA_API_KEY=<daytona-api-key>
+DAYTONA_API_URL=https://app.daytona.io/api
+DAYTONA_TARGET=
+MARKET_LENS_DAYTONA_SANDBOX_IMAGE=python:3.11-slim
+MARKET_LENS_DAYTONA_SNAPSHOT=
+MARKET_LENS_DAYTONA_CREATE_TIMEOUT=90
+MARKET_LENS_DAYTONA_DELETE_TIMEOUT=60
+MARKET_LENS_DAYTONA_DISK_GB=3
+```
+
+The Daytona runner creates a private ephemeral sandbox for each request, maps CPU and memory limits
+to Daytona resources, uploads only declared input files, limits downloaded output and artifacts,
+and waits for remote deletion on every completion or failure path. Network access is blocked by
+default. Requests using the allowlist policy pass only validated domain names to Daytona's domain
+allowlist.
+
+Image-based creation applies per-request resource limits. For lower startup latency in production,
+configure a prebuilt `MARKET_LENS_DAYTONA_SNAPSHOT`; the snapshot's provisioned resources then define
+the runtime limits. Prefer an immutable image digest or a controlled snapshot over a mutable image
+tag.
+
+The real remote integration test is opt-in because it creates billable external resources:
+
+```powershell
+$env:MARKET_LENS_RUN_DAYTONA_TESTS="true"
+uv run pytest tests/test_daytona_sandbox_integration.py -v
+```
+
+MCP integration is a later transport layer and does not bypass the tool policy or sandbox boundary.
 
 ## Development
 

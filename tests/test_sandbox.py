@@ -139,6 +139,18 @@ def test_sandbox_rejects_allowlist_without_domains() -> None:
         make_request(network_policy=SandboxNetworkPolicy.ALLOWLIST)
 
 
+@pytest.mark.parametrize(
+    "domain",
+    ["https://example.com", "example.com:443", "*.example.com", "example", "a..com", "bad,com"],
+)
+def test_sandbox_rejects_unsafe_network_domains(domain: str) -> None:
+    with pytest.raises(ValidationError, match="valid domain names"):
+        make_request(
+            network_policy=SandboxNetworkPolicy.ALLOWLIST,
+            network_allowlist=[domain],
+        )
+
+
 def test_disabled_and_daytona_runners_are_unavailable() -> None:
     request = make_request()
 
@@ -194,6 +206,7 @@ def test_docker_runner_applies_security_and_resource_limits(tmp_path: Path) -> N
     assert options["mem_limit"] == "256m"
     assert options["nano_cpus"] == 500_000_000
     assert options["pids_limit"] == 64
+    assert options["environment"]["MARKET_LENS_OUTPUT_DIR"] == "/output"
     assert options["stdin_open"] is False
     assert options["tty"] is False
     assert {mount["bind"] for mount in options["volumes"].values()} == {
@@ -263,7 +276,4 @@ def test_run_python_uses_a_fixed_workspace_script(tmp_path: Path) -> None:
     result = runner.run_python("print('hello')")
 
     assert result.status is SandboxStatus.SUCCESS
-    assert client.containers.last_options["command"] == [
-        "python",
-        "/workspace/main.py",
-    ]
+    assert client.containers.last_options["command"] == ["python", "main.py"]

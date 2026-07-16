@@ -126,6 +126,7 @@ class DockerSandboxRunner(SandboxRunner):
                     pids_limit=request.limits.pids_limit,
                     environment={
                         "HOME": "/tmp",
+                        "MARKET_LENS_OUTPUT_DIR": "/output",
                         "PYTHONDONTWRITEBYTECODE": "1",
                         "PYTHONUNBUFFERED": "1",
                     },

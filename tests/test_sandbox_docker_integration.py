@@ -57,7 +57,7 @@ else:
     root_filesystem = "writable"
 
 print("sandbox stdout")
-Path("/output/result.txt").write_text(
+Path(os.environ["MARKET_LENS_OUTPUT_DIR"]).joinpath("result.txt").write_text(
     json.dumps(
         {
             "network": network,

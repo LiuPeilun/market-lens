@@ -33,6 +33,21 @@ class Settings:
     docker_sandbox_temp_root: Path = Path(
         os.getenv("MARKET_LENS_DOCKER_SANDBOX_TEMP_ROOT", ".tmp/sandboxes")
     )
+    daytona_api_key: str | None = os.getenv("DAYTONA_API_KEY") or None
+    daytona_api_url: str | None = os.getenv("DAYTONA_API_URL") or None
+    daytona_target: str | None = os.getenv("DAYTONA_TARGET") or None
+    daytona_sandbox_image: str = os.getenv(
+        "MARKET_LENS_DAYTONA_SANDBOX_IMAGE",
+        "python:3.11-slim",
+    )
+    daytona_snapshot: str | None = os.getenv("MARKET_LENS_DAYTONA_SNAPSHOT") or None
+    daytona_create_timeout: float = float(
+        os.getenv("MARKET_LENS_DAYTONA_CREATE_TIMEOUT", "90")
+    )
+    daytona_delete_timeout: float = float(
+        os.getenv("MARKET_LENS_DAYTONA_DELETE_TIMEOUT", "60")
+    )
+    daytona_disk_gb: int = int(os.getenv("MARKET_LENS_DAYTONA_DISK_GB", "3"))
 
     @property
     def supabase_configured(self) -> bool:

@@ -31,7 +31,7 @@ class SandboxRunner(ABC):
         request_files = [SandboxFile(path="main.py", content=code), *(files or [])]
         return self.run(
             SandboxRequest(
-                command=["python", "/workspace/main.py"],
+                command=["python", "main.py"],
                 files=request_files,
                 artifact_paths=artifact_paths or [],
                 limits=limits or SandboxLimits(),

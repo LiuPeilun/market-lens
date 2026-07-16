@@ -7,7 +7,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.pytest-sandbox-*/
+.pytest-*/
 .ruff_cache/
 .env
 .env.local

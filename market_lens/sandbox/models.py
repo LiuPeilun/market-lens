@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import PurePosixPath
 
@@ -71,6 +72,19 @@ class SandboxRequest(BaseModel):
     def validate_artifact_paths(cls, value: list[str]) -> list[str]:
         return [validate_relative_path(path) for path in value]
 
+    @field_validator("network_allowlist")
+    @classmethod
+    def validate_network_allowlist(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for domain in value:
+            candidate = domain.strip().lower().rstrip(".")
+            if not _is_safe_domain(candidate):
+                raise ValueError("network allowlist entries must be valid domain names")
+            normalized.append(candidate)
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("network allowlist entries must be unique")
+        return normalized
+
     @model_validator(mode="after")
     def validate_request(self) -> SandboxRequest:
         if self.network_policy is SandboxNetworkPolicy.NONE and self.network_allowlist:
@@ -118,3 +132,12 @@ def validate_relative_path(value: str) -> str:
     if any(part in {"", "/"} for part in path.parts):
         raise ValueError("sandbox paths must be safe relative paths")
     return path.as_posix()
+
+
+_DOMAIN_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _is_safe_domain(value: str) -> bool:
+    if not value or len(value) > 253 or "." not in value:
+        return False
+    return all(_DOMAIN_LABEL.fullmatch(label) for label in value.split("."))
