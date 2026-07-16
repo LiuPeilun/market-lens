@@ -18,7 +18,9 @@ repository name while keeping Python import syntax valid.
 - Independent React frontend for the research workspace.
 - Supabase authentication plus per-user analysis and chat history.
 - CLI for quick local checks.
-- Daytona and Codex integration placeholders with explicit boundaries.
+- A protocol-neutral sandbox boundary with a locked-down local Docker backend and a reserved
+  Daytona backend.
+- Codex integration placeholders with explicit boundaries.
 
 Public Eastmoney/Tiantian Fund endpoints are web interfaces, not official SLA-backed APIs. Use this
 project for personal research and local analysis. Do not treat generated output as investment advice.
@@ -144,7 +146,7 @@ market_lens/
   storage/        SQLite cache and Supabase persistence adapter
   tools/          Tool registry, schemas, policy, execution, and audit boundaries
   valuation/      Metrics and valuation signal logic
-  sandbox/        Daytona execution boundary placeholder
+  sandbox/        Isolated execution models and Docker/Daytona backend boundaries
   engineering/    Codex engineering-agent boundary placeholder
 frontend/
   src/
@@ -169,8 +171,39 @@ User/API
   -> JSON report and Supabase history
 ```
 
-Codex should remain an engineering assistant for changing this codebase. Daytona should be used for
-isolated execution of generated analysis scripts once that integration is added.
+Codex should remain an engineering assistant for changing this codebase. Generated analysis scripts
+must use the sandbox boundary once that capability is exposed; they must not execute inside the
+FastAPI process.
+
+## Sandbox execution
+
+Sandbox execution is disabled by default and is not currently exposed as an LLM-callable tool. The
+current Docker backend establishes the execution boundary needed before MCP or generated-code tools
+are added.
+
+Prepare the configured image explicitly. Market Lens never pulls sandbox images automatically:
+
+```powershell
+docker pull python:3.11-slim
+docker image inspect python:3.11-slim
+```
+
+Then opt in through the backend environment file:
+
+```dotenv
+MARKET_LENS_SANDBOX_BACKEND=docker
+MARKET_LENS_DOCKER_SANDBOX_IMAGE=python:3.11-slim
+MARKET_LENS_DOCKER_SANDBOX_TEMP_ROOT=.tmp/sandboxes
+```
+
+The Docker runner uses a fixed local image, disabled networking, a read-only root filesystem, a
+non-root user, dropped Linux capabilities, `no-new-privileges`, and CPU, memory, process, output,
+artifact, and wall-clock limits. It mounts only a temporary read-only input directory and a temporary
+output directory. The repository, environment files, host shell, and Docker socket are not mounted.
+
+The Daytona runner is an interface-compatible placeholder and remains unavailable until its remote
+backend and credentials are configured. MCP integration is a later transport layer and does not
+bypass the tool policy or sandbox boundary.
 
 ## Development
 

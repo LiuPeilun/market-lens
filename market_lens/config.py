@@ -25,6 +25,14 @@ class Settings:
     llm_enabled: bool = os.getenv("MARKET_LENS_LLM_ENABLED", "true").lower() == "true"
     supabase_url: str | None = os.getenv("SUPABASE_URL") or None
     supabase_publishable_key: str | None = os.getenv("SUPABASE_PUBLISHABLE_KEY") or None
+    sandbox_backend: str = os.getenv("MARKET_LENS_SANDBOX_BACKEND", "disabled")
+    docker_sandbox_image: str = os.getenv(
+        "MARKET_LENS_DOCKER_SANDBOX_IMAGE",
+        "python:3.11-slim",
+    )
+    docker_sandbox_temp_root: Path = Path(
+        os.getenv("MARKET_LENS_DOCKER_SANDBOX_TEMP_ROOT", ".tmp/sandboxes")
+    )
 
     @property
     def supabase_configured(self) -> bool:

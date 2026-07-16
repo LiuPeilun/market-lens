@@ -4,12 +4,10 @@ from market_lens.sandbox.models import SandboxRequest, SandboxResult, SandboxSta
 from market_lens.sandbox.runner import SandboxRunner
 
 
-class DaytonaRunner(SandboxRunner):
-    """Daytona backend boundary reserved for the next implementation phase."""
-
+class DisabledSandboxRunner(SandboxRunner):
     @property
     def backend_name(self) -> str:
-        return "daytona"
+        return "disabled"
 
     def is_available(self) -> bool:
         return False
@@ -19,6 +17,6 @@ class DaytonaRunner(SandboxRunner):
         return SandboxResult(
             backend=self.backend_name,
             status=SandboxStatus.UNAVAILABLE,
-            error_code="daytona_not_configured",
-            message="Daytona sandbox execution is not configured yet",
+            error_code="sandbox_disabled",
+            message="Sandbox execution is disabled",
         )
