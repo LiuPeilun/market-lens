@@ -20,6 +20,7 @@ from market_lens.api.schemas import (
     ChatRequest,
     ChatResponse,
 )
+from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
 from market_lens.storage.supabase import (
@@ -27,6 +28,10 @@ from market_lens.storage.supabase import (
     SupabaseError,
     SupabaseRepository,
 )
+from market_lens.storage.tool_audit import SupabaseToolAuditRecorder
+from market_lens.tools.catalog import build_default_executor
+from market_lens.tools.executor import require_tool_data
+from market_lens.tools.models import ToolContext
 
 app = FastAPI(
     title="Market Lens API",
@@ -142,21 +147,15 @@ def search_assets(
 ) -> AssetSearchResponse:
     client = get_client()
     try:
-        rows = client.search_assets(keyword, asset_type=asset_type, limit=limit)
-    except EastmoneyError as exc:
+        tool_data = require_tool_data(
+            build_default_executor(data_client=client).execute(
+                SEARCH_ASSETS_TOOL,
+                {"keyword": keyword, "asset_type": asset_type, "limit": limit},
+            )
+        )
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    items = [
-        {
-            "asset_type": item.asset_type,
-            "code": item.code,
-            "name": item.name,
-            "market": item.market,
-            "quote_id": item.quote_id,
-            "source_type": item.source_type,
-        }
-        for item in rows
-    ]
-    return AssetSearchResponse(keyword=keyword, count=len(items), items=items)
+    return AssetSearchResponse.model_validate(tool_data)
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
@@ -164,18 +163,32 @@ def analyze(
     request: AnalyzeRequest,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> AnalyzeResponse:
-    agent = MarketAnalysisAgent()
+    client = get_client()
+    agent = MarketAnalysisAgent(client)
+    repository = get_repository()
+    executor = build_default_executor(
+        data_client=client,
+        analysis_agent=agent,
+        audit_recorder=SupabaseToolAuditRecorder(repository, user),
+    )
     try:
-        result = agent.analyze(
-            asset_type=request.asset_type,
-            code=request.code,
-            start=request.start,
-            end=request.end or date.today(),
+        tool_data = require_tool_data(
+            executor.execute(
+                ANALYZE_ASSET_TOOL,
+                {
+                    "asset_type": request.asset_type,
+                    "code": request.code,
+                    "start": request.start,
+                    "end": request.end or date.today(),
+                },
+                context=ToolContext(user_id=user.id),
+            )
         )
-    except (ValueError, EastmoneyError) as exc:
+        result = tool_data["result"]
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        row = get_repository().save_analysis(
+        row = repository.save_analysis(
             user,
             request_params=jsonable_encoder(request.model_dump()),
             result=jsonable_encoder(result),
@@ -191,7 +204,6 @@ def chat(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> ChatResponse:
     client = get_client()
-    agent = ChatAgent(data_client=client, analysis_agent=MarketAnalysisAgent(client))
     repository = get_repository()
     context = None
     if request.context is not None:
@@ -207,6 +219,17 @@ def chat(
             title=request.message,
         )
         session_id = UUID(str(session["id"]))
+        analysis_agent = MarketAnalysisAgent(client)
+        agent = ChatAgent(
+            data_client=client,
+            analysis_agent=analysis_agent,
+            tool_executor=build_default_executor(
+                data_client=client,
+                analysis_agent=analysis_agent,
+                audit_recorder=SupabaseToolAuditRecorder(repository, user),
+            ),
+            tool_context=ToolContext(user_id=user.id, session_id=session_id),
+        )
         result = agent.reply(
             message=request.message,
             context=context,
@@ -237,7 +260,6 @@ def chat_stream(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> StreamingResponse:
     client = get_client()
-    agent = ChatAgent(data_client=client, analysis_agent=MarketAnalysisAgent(client))
     repository = get_repository()
     context = None
     if request.context is not None:
@@ -254,6 +276,17 @@ def chat_stream(
             title=request.message,
         )
         session_id = UUID(str(session["id"]))
+        analysis_agent = MarketAnalysisAgent(client)
+        agent = ChatAgent(
+            data_client=client,
+            analysis_agent=analysis_agent,
+            tool_executor=build_default_executor(
+                data_client=client,
+                analysis_agent=analysis_agent,
+                audit_recorder=SupabaseToolAuditRecorder(repository, user),
+            ),
+            tool_context=ToolContext(user_id=user.id, session_id=session_id),
+        )
         repository.save_chat_message(user, session_id, "user", request.message)
     except SupabaseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

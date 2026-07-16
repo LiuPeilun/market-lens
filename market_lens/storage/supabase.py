@@ -246,6 +246,38 @@ class SupabaseRepository:
             },
         )
 
+    def save_tool_invocation(
+        self,
+        user: AuthenticatedUser,
+        session_id: UUID | None,
+        tool_name: str,
+        capability: str,
+        risk_level: str,
+        execution_target: str,
+        policy_decision: str,
+        status: str,
+        duration_ms: int,
+        input_summary: dict[str, Any],
+        error_code: str | None,
+    ) -> dict[str, Any]:
+        return self.client.insert(
+            "tool_invocations",
+            user.access_token,
+            {
+                "user_id": str(user.id),
+                "session_id": str(session_id) if session_id else None,
+                "tool_name": tool_name,
+                "capability": capability,
+                "risk_level": risk_level,
+                "execution_target": execution_target,
+                "policy_decision": policy_decision,
+                "status": status,
+                "duration_ms": duration_ms,
+                "input_summary": input_summary,
+                "error_code": error_code,
+            },
+        )
+
     def list_analyses(self, user: AuthenticatedUser, limit: int) -> list[dict[str, Any]]:
         return self.client.select(
             "analysis_runs",

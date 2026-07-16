@@ -138,9 +138,11 @@ uv run market-lens analyze fund 161725 --start 2015-01-01
 ```text
 market_lens/
   agent/          Business orchestration for user-facing analysis
+  capabilities/   Domain capability packs exposed through the common tool layer
   api/            FastAPI app and schemas
   data/           Eastmoney/Tiantian Fund data adapters
   storage/        SQLite cache and Supabase persistence adapter
+  tools/          Tool registry, schemas, policy, execution, and audit boundaries
   valuation/      Metrics and valuation signal logic
   sandbox/        Daytona execution boundary placeholder
   engineering/    Codex engineering-agent boundary placeholder
@@ -159,7 +161,9 @@ The runtime product path is:
 User/API
   -> Supabase Auth
   -> market_lens.agent
-  -> market_lens.data tools
+  -> ToolRegistry and ToolPolicy
+  -> capability tools
+  -> market_lens.data adapters
   -> local SQLite cache
   -> market_lens.valuation
   -> JSON report and Supabase history

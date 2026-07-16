@@ -76,3 +76,30 @@ def test_repository_saves_analysis_for_authenticated_user() -> None:
     assert token == "access-token"
     assert payload["user_id"] == str(USER_ID)
     assert payload["asset_code"] == "600519"
+
+
+def test_repository_saves_tool_invocation_audit() -> None:
+    client = FakeRESTClient()
+    repository = SupabaseRepository(client=client)  # type: ignore[arg-type]
+    user = AuthenticatedUser(USER_ID, "user@example.com", "access-token")
+
+    repository.save_tool_invocation(
+        user=user,
+        session_id=None,
+        tool_name="finance.analyze_asset",
+        capability="finance",
+        risk_level="compute",
+        execution_target="trusted_local",
+        policy_decision="allow",
+        status="success",
+        duration_ms=123,
+        input_summary={"code": "600519"},
+        error_code=None,
+    )
+
+    table, token, payload = client.inserts[0]
+    assert table == "tool_invocations"
+    assert token == "access-token"
+    assert payload["user_id"] == str(USER_ID)
+    assert payload["tool_name"] == "finance.analyze_asset"
+    assert payload["input_summary"] == {"code": "600519"}

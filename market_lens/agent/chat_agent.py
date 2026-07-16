@@ -12,8 +12,12 @@ from market_lens.agent.llm_client import (
     build_llm_messages,
 )
 from market_lens.agent.market_agent import MarketAnalysisAgent
+from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, is_a_share_symbol
+from market_lens.tools.catalog import build_default_executor
+from market_lens.tools.executor import ToolExecutor, require_tool_data
+from market_lens.tools.models import ToolContext
 from market_lens.types import AssetType
 from market_lens.valuation.metrics import format_pct
 
@@ -53,11 +57,18 @@ class ChatAgent:
         analysis_agent: MarketAnalysisAgent | None = None,
         llm_client: OpenAICompatibleLLMClient | None = None,
         use_llm: bool | None = None,
+        tool_executor: ToolExecutor | None = None,
+        tool_context: ToolContext | None = None,
     ) -> None:
         self.data_client = data_client or EastmoneyClient()
         self.analysis_agent = analysis_agent or MarketAnalysisAgent(self.data_client)
         self.llm_client = llm_client or OpenAICompatibleLLMClient()
         self.use_llm = settings.llm_enabled if use_llm is None else use_llm
+        self.tool_executor = tool_executor or build_default_executor(
+            data_client=self.data_client,
+            analysis_agent=self.analysis_agent,
+        )
+        self.tool_context = tool_context or ToolContext()
 
     def reply(
         self,
@@ -103,12 +114,19 @@ class ChatAgent:
                 citations=[],
             )
 
-        analysis = self.analysis_agent.analyze(
-            asset_type=asset.asset_type,
-            code=asset.code,
-            start=start,
-            end=end,
+        tool_data = require_tool_data(
+            self.tool_executor.execute(
+                ANALYZE_ASSET_TOOL,
+                {
+                    "asset_type": asset.asset_type,
+                    "code": asset.code,
+                    "start": start,
+                    "end": end,
+                },
+                context=self.tool_context,
+            )
         )
+        analysis = tool_data["result"]
         asset_payload = {
             "asset_type": analysis.get("asset_type", asset.asset_type),
             "code": analysis.get("code", asset.code),
@@ -189,13 +207,20 @@ class ChatAgent:
 
         keyword = extract_asset_keyword(message)
         if keyword:
-            candidates = self.data_client.search_assets(keyword, limit=5)
+            tool_data = require_tool_data(
+                self.tool_executor.execute(
+                    SEARCH_ASSETS_TOOL,
+                    {"keyword": keyword, "limit": 5},
+                    context=self.tool_context,
+                )
+            )
+            candidates = tool_data["items"]
             if candidates:
                 candidate = candidates[0]
                 return ChatAssetContext(
-                    asset_type=candidate.asset_type,
-                    code=candidate.code,
-                    name=candidate.name,
+                    asset_type=candidate["asset_type"],
+                    code=candidate["code"],
+                    name=candidate["name"],
                 )
 
         return context
