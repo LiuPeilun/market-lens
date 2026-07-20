@@ -84,8 +84,9 @@ class McpServerConfig(BaseModel):
             raise ValueError(
                 "stdio MCP servers require a container image and command, without URL headers"
             )
-        if self.image and not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", self.image):
-            raise ValueError("MCP stdio container image must use an immutable sha256 digest")
+        immutable_image = r"(?:sha256:[0-9a-f]{64}|[^\s]+@sha256:[0-9a-f]{64})"
+        if self.image and not re.fullmatch(immutable_image, self.image):
+            raise ValueError("MCP stdio container image must use an immutable image ID or digest")
         if self.transport is McpTransport.STDIO and any(
             policy.requires_network for policy in self.tools.values()
         ):
