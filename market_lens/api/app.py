@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -23,6 +25,7 @@ from market_lens.api.schemas import (
 from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
+from market_lens.mcp.factory import build_mcp_gateway
 from market_lens.storage.supabase import (
     AuthenticatedUser,
     SupabaseError,
@@ -33,10 +36,24 @@ from market_lens.tools.catalog import build_default_executor
 from market_lens.tools.executor import require_tool_data
 from market_lens.tools.models import ToolContext
 
+mcp_gateway = build_mcp_gateway()
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    del application
+    await mcp_gateway.astart()
+    try:
+        yield
+    finally:
+        await mcp_gateway.aclose()
+
+
 app = FastAPI(
     title="Market Lens API",
     version=__version__,
     description="Agent service for market data retrieval and valuation analysis.",
+    lifespan=lifespan,
 )
 
 
@@ -59,6 +76,7 @@ def health() -> dict[str, str | bool]:
         "status": "ok",
         "version": __version__,
         "supabase_configured": settings.supabase_configured,
+        "mcp_available": mcp_gateway.is_available(),
     }
 
 
@@ -148,7 +166,7 @@ def search_assets(
     client = get_client()
     try:
         tool_data = require_tool_data(
-            build_default_executor(data_client=client).execute(
+            build_default_executor(data_client=client, mcp_gateway=mcp_gateway).execute(
                 SEARCH_ASSETS_TOOL,
                 {"keyword": keyword, "asset_type": asset_type, "limit": limit},
             )
@@ -170,6 +188,7 @@ def analyze(
         data_client=client,
         analysis_agent=agent,
         audit_recorder=SupabaseToolAuditRecorder(repository, user),
+        mcp_gateway=mcp_gateway,
     )
     try:
         tool_data = require_tool_data(
@@ -227,6 +246,7 @@ def chat(
                 data_client=client,
                 analysis_agent=analysis_agent,
                 audit_recorder=SupabaseToolAuditRecorder(repository, user),
+                mcp_gateway=mcp_gateway,
             ),
             tool_context=ToolContext(user_id=user.id, session_id=session_id),
         )
@@ -284,6 +304,7 @@ def chat_stream(
                 data_client=client,
                 analysis_agent=analysis_agent,
                 audit_recorder=SupabaseToolAuditRecorder(repository, user),
+                mcp_gateway=mcp_gateway,
             ),
             tool_context=ToolContext(user_id=user.id, session_id=session_id),
         )

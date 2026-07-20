@@ -1,0 +1,41 @@
+{
+  "servers": [
+    {
+      "name": "remote_example",
+      "enabled": false,
+      "transport": "streamable_http",
+      "url": "https://mcp.example.com/mcp",
+      "headers_from_env": {
+        "Authorization": "REMOTE_MCP_AUTHORIZATION"
+      },
+      "tools": {
+        "search": {
+          "description": "Search the reviewed remote research catalog",
+          "risk": "read",
+          "capability": "research",
+          "timeout_seconds": 30,
+          "idempotent": true,
+          "requires_network": true
+        }
+      }
+    },
+    {
+      "name": "stdio_example",
+      "enabled": false,
+      "transport": "stdio",
+      "image": "registry.example.com/mcp/server@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "command": ["python", "-m", "server"],
+      "env_from_host": ["STDIO_MCP_API_KEY"],
+      "tools": {
+        "lookup": {
+          "description": "Look up data in the reviewed isolated server",
+          "risk": "read",
+          "capability": "research",
+          "timeout_seconds": 30,
+          "idempotent": true,
+          "requires_network": false
+        }
+      }
+    }
+  ]
+}

@@ -11,6 +11,7 @@ __pycache__/
 .ruff_cache/
 .env
 .env.local
+mcp.servers.json
 frontend/.env.local
 frontend/.env.development.local
 _tmp_*

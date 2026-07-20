@@ -238,7 +238,26 @@ $env:MARKET_LENS_RUN_DAYTONA_TESTS="true"
 uv run pytest tests/test_daytona_sandbox_integration.py -v
 ```
 
-MCP integration is a later transport layer and does not bypass the tool policy or sandbox boundary.
+## MCP Gateway
+
+The MCP Client/Gateway is implemented but disabled until reviewed servers are selected. It supports
+Streamable HTTP over HTTPS and Docker-isolated stdio servers. Server discovery is intersected with
+an explicit per-server tool allowlist; every exposed tool must also declare its risk, timeout, and
+capability mapping. MCP calls pass through the existing `ToolRegistry`, `ToolPolicy`, executor audit,
+and response-size limits.
+
+Start from `mcp.servers.example.json` only after choosing and reviewing a server. Put the real
+configuration in the ignored `mcp.servers.json`, reference secrets by environment-variable name,
+and set:
+
+```dotenv
+MARKET_LENS_MCP_SERVERS_FILE=mcp.servers.json
+MARKET_LENS_MCP_ALLOW_INSECURE_LOCAL_HTTP=false
+MARKET_LENS_MCP_STARTUP_STRICT=false
+```
+
+See `docs/MCP_GATEWAY.md` for the trust boundary, transport constraints, approval behavior, and
+server onboarding checklist. No MCP server is selected or enabled in the repository by default.
 
 ## Development
 

@@ -48,6 +48,15 @@ class Settings:
         os.getenv("MARKET_LENS_DAYTONA_DELETE_TIMEOUT", "60")
     )
     daytona_disk_gb: int = int(os.getenv("MARKET_LENS_DAYTONA_DISK_GB", "3"))
+    mcp_servers_file: Path | None = (
+        Path(value) if (value := os.getenv("MARKET_LENS_MCP_SERVERS_FILE")) else None
+    )
+    mcp_allow_insecure_local_http: bool = os.getenv(
+        "MARKET_LENS_MCP_ALLOW_INSECURE_LOCAL_HTTP", "false"
+    ).lower() == "true"
+    mcp_startup_strict: bool = os.getenv(
+        "MARKET_LENS_MCP_STARTUP_STRICT", "false"
+    ).lower() == "true"
 
     @property
     def supabase_configured(self) -> bool:

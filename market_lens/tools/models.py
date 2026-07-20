@@ -86,13 +86,14 @@ class ToolSpec:
     timeout_seconds: float = 30.0
     idempotent: bool = True
     requires_network: bool = False
+    input_schema_override: dict[str, Any] | None = None
 
     def schema(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "capability": self.capability,
             "description": self.description,
-            "input_schema": self.input_model.model_json_schema(),
+            "input_schema": self.input_schema_override or self.input_model.model_json_schema(),
             "output_schema": self.output_model.model_json_schema(),
             "risk": self.risk.value,
             "execution_target": self.execution_target.value,
