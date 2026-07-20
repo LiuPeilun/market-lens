@@ -57,6 +57,15 @@ class Settings:
     mcp_startup_strict: bool = os.getenv(
         "MARKET_LENS_MCP_STARTUP_STRICT", "false"
     ).lower() == "true"
+    mcp_http_proxy: str | None = os.getenv("MARKET_LENS_MCP_HTTP_PROXY") or None
+    mcp_discovery_retry_seconds: float = float(
+        os.getenv("MARKET_LENS_MCP_DISCOVERY_RETRY_SECONDS", "60")
+    )
+    llm_tool_max_rounds: int = int(os.getenv("MARKET_LENS_LLM_TOOL_MAX_ROUNDS", "4"))
+    llm_tool_max_calls: int = int(os.getenv("MARKET_LENS_LLM_TOOL_MAX_CALLS", "8"))
+    llm_tool_result_max_chars: int = int(
+        os.getenv("MARKET_LENS_LLM_TOOL_RESULT_MAX_CHARS", "40000")
+    )
 
     @property
     def supabase_configured(self) -> bool:

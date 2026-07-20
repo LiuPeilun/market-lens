@@ -70,3 +70,39 @@ Until that flow exists, confirmation-required MCP calls do not execute.
 
 Set `MARKET_LENS_MCP_STARTUP_STRICT=true` when production startup must fail if any enabled server
 cannot be verified. The default records the failed server and keeps non-MCP features available.
+
+Non-strict discovery runs in the background so an unavailable MCP endpoint does not delay API
+startup. `/health` exposes `mcp_available` and the names of `mcp_failed_servers`, without returning
+credentials or raw transport errors. Failed discovery is retried every 60 seconds by default;
+configure `MARKET_LENS_MCP_DISCOVERY_RETRY_SECONDS=0` to disable retries.
+
+## DeepWiki development connection
+
+The reviewed first remote server is DeepWiki's official public-repository endpoint:
+
+```text
+https://mcp.deepwiki.com/mcp
+```
+
+Its allowlist contains `read_wiki_structure`, `read_wiki_contents`, and `ask_question`. The first
+two are classified as read operations; `ask_question` is classified as compute. DeepWiki does not
+receive local files, Supabase credentials, chat history, or private repository access.
+
+When the host requires an outbound proxy, configure it explicitly rather than inheriting all proxy
+environment variables:
+
+```dotenv
+MARKET_LENS_MCP_HTTP_PROXY=http://127.0.0.1:7897
+```
+
+## LLM tool orchestration
+
+The chat agent exposes only tools whose current policy decision is `allow`. It maps namespaced
+Market Lens names to OpenAI-compatible function names, validates model arguments through the
+existing executor, records calls through the normal audit path, and feeds bounded tool results back
+to the LLM. Tool output is marked and prompted as untrusted data.
+
+Limits are configurable with `MARKET_LENS_LLM_TOOL_MAX_ROUNDS`,
+`MARKET_LENS_LLM_TOOL_MAX_CALLS`, and `MARKET_LENS_LLM_TOOL_RESULT_MAX_CHARS`. Streaming chat
+completes tool-selection rounds first and then streams the final answer. Write and external-side
+effect tools stay hidden until an approval-and-resume flow exists.

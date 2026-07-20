@@ -9,9 +9,11 @@ from typing import Any, Literal
 from market_lens.agent.llm_client import (
     LLMError,
     OpenAICompatibleLLMClient,
+    build_general_llm_messages,
     build_llm_messages,
 )
 from market_lens.agent.market_agent import MarketAnalysisAgent
+from market_lens.agent.tool_orchestrator import ToolOrchestrator, ToolTrace
 from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, is_a_share_symbol
@@ -29,6 +31,7 @@ ChatIntent = Literal[
     "data_source",
     "clarify_asset",
     "need_asset",
+    "general_query",
 ]
 
 
@@ -47,7 +50,7 @@ class PreparedChatReply:
     analysis: dict[str, Any] | None
     candidates: list[dict[str, Any]]
     citations: list[str]
-    llm_messages: list[dict[str, str]] | None = None
+    llm_messages: list[dict[str, Any]] | None = None
 
 
 class ChatAgent:
@@ -105,6 +108,20 @@ class ChatAgent:
         intent = classify_intent(normalized_message)
         asset = self._resolve_asset(normalized_message, context)
         if asset is None:
+            if self.use_llm:
+                return PreparedChatReply(
+                    answer="当前无法完成通用研究回答，请稍后重试。",
+                    intent="general_query",
+                    asset=None,
+                    analysis=None,
+                    candidates=[],
+                    citations=[],
+                    llm_messages=build_general_llm_messages(
+                        normalized_message,
+                        start=start.isoformat(),
+                        end=end.isoformat(),
+                    ),
+                )
             return PreparedChatReply(
                 answer="请告诉我要分析的基金或股票名称/代码，例如“南方红利低波”或“600519”。",
                 intent="need_asset",
@@ -171,8 +188,14 @@ class ChatAgent:
             yield {"type": "done"}
             return
         try:
+            orchestration = ToolOrchestrator(
+                self.llm_client,
+                self.tool_executor,
+                self.tool_context,
+            ).prepare_stream(prepared.llm_messages)
+            prepared.citations.extend(_tool_citations(orchestration.traces))
             emitted = False
-            for delta in self.llm_client.stream_complete(prepared.llm_messages):
+            for delta in self.llm_client.stream_complete(orchestration.messages):
                 emitted = True
                 yield {"type": "token", "delta": delta}
             if not emitted:
@@ -186,12 +209,18 @@ class ChatAgent:
         self,
         template_answer: str,
         citations: list[str],
-        llm_messages: list[dict[str, str]],
+        llm_messages: list[dict[str, Any]],
     ) -> str:
         if not self.use_llm:
             return template_answer
         try:
-            return self.llm_client.complete(llm_messages)
+            result = ToolOrchestrator(
+                self.llm_client,
+                self.tool_executor,
+                self.tool_context,
+            ).run(llm_messages)
+            citations.extend(_tool_citations(result.traces))
+            return result.answer
         except LLMError:
             citations.append("LLM 生成失败，已回退到规则模板回答。")
             return template_answer
@@ -204,6 +233,9 @@ class ChatAgent:
         code = extract_code(message)
         if code:
             return ChatAssetContext(asset_type=infer_asset_type(code), code=code)
+
+        if is_repository_research_query(message):
+            return context
 
         keyword = extract_asset_keyword(message)
         if keyword:
@@ -251,6 +283,17 @@ def prepared_to_response(prepared: PreparedChatReply) -> dict[str, Any]:
 
 def contains_any(value: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in value for keyword in keywords)
+
+
+def is_repository_research_query(message: str) -> bool:
+    lowered = message.lower()
+    return bool(
+        re.search(r"\b[a-z0-9_.-]+/[a-z0-9_.-]+\b", lowered)
+        or contains_any(
+            lowered,
+            ("github", "deepwiki", "仓库", "代码库", "repository", "repo", "sdk", "框架文档"),
+        )
+    )
 
 
 def extract_code(message: str) -> str | None:
@@ -358,3 +401,11 @@ def format_confidence(value: Any) -> str:
     if isinstance(value, int | float):
         return f"{value * 100:.0f}%"
     return "暂无"
+
+
+def _tool_citations(traces: list[ToolTrace]) -> list[str]:
+    return [
+        f"工具调用：{trace.tool_name}（{trace.status}）"
+        for trace in traces
+        if trace.tool_name
+    ]

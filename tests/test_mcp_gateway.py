@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import anyio
 import pytest
 from mcp import types
 from pydantic import ValidationError
@@ -47,6 +48,18 @@ class FakeMcpClient:
     ) -> types.CallToolResult:
         self.calls.append({"server": server.name, "name": name, "arguments": arguments})
         return self.result
+
+
+class RecoveringMcpClient(FakeMcpClient):
+    def __init__(self, tools: list[types.Tool]) -> None:
+        super().__init__(tools)
+        self.discovery_attempts = 0
+
+    async def list_tools(self, server: McpServerConfig) -> list[types.Tool]:
+        self.discovery_attempts += 1
+        if self.discovery_attempts == 1:
+            raise RuntimeError("temporary failure")
+        return await super().list_tools(server)
 
 
 def remote_tool(name: str = "lookup") -> types.Tool:
@@ -270,3 +283,17 @@ def test_gateway_rejects_oversized_tool_responses() -> None:
 
     assert result.status is ToolStatus.ERROR
     assert result.error_code == "mcp_response_too_large"
+
+
+def test_gateway_refresh_recovers_failed_discovery() -> None:
+    client = RecoveringMcpClient([remote_tool()])
+    gateway = McpGateway(McpGatewayConfig(servers=[http_server()]), client)
+
+    gateway.start()
+    assert gateway.has_started() is True
+    assert gateway.is_available() is False
+
+    anyio.run(gateway.arefresh)
+
+    assert gateway.is_available() is True
+    assert gateway.startup_errors == {}

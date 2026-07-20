@@ -936,6 +936,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -956,6 +957,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "typer", specifier = ">=0.12.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]

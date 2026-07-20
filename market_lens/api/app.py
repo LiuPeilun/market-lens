@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import date
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -39,13 +40,30 @@ from market_lens.tools.models import ToolContext
 mcp_gateway = build_mcp_gateway()
 
 
+async def maintain_mcp_discovery() -> None:
+    await mcp_gateway.astart()
+    retry_seconds = settings.mcp_discovery_retry_seconds
+    while retry_seconds > 0 and not mcp_gateway.is_available() and mcp_gateway.startup_errors:
+        await asyncio.sleep(retry_seconds)
+        await mcp_gateway.arefresh()
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     del application
-    await mcp_gateway.astart()
+    discovery_task: asyncio.Task[None] | None = None
+    if settings.mcp_startup_strict:
+        await mcp_gateway.astart()
+    else:
+        discovery_task = asyncio.create_task(maintain_mcp_discovery())
     try:
         yield
     finally:
+        if discovery_task is not None:
+            if not discovery_task.done():
+                discovery_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await discovery_task
         await mcp_gateway.aclose()
 
 
@@ -71,12 +89,23 @@ def to_sse_data(event: dict[str, Any]) -> str:
 
 
 @app.get("/health")
-def health() -> dict[str, str | bool]:
+def health() -> dict[str, Any]:
+    configured = any(server.enabled for server in mcp_gateway.config.servers)
+    if mcp_gateway.is_available():
+        mcp_status = "available"
+    elif not configured:
+        mcp_status = "disabled"
+    elif not mcp_gateway.has_started():
+        mcp_status = "starting"
+    else:
+        mcp_status = "degraded"
     return {
         "status": "ok",
         "version": __version__,
         "supabase_configured": settings.supabase_configured,
         "mcp_available": mcp_gateway.is_available(),
+        "mcp_status": mcp_status,
+        "mcp_failed_servers": sorted(mcp_gateway.startup_errors),
     }
 
 

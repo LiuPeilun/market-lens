@@ -259,6 +259,11 @@ MARKET_LENS_MCP_STARTUP_STRICT=false
 See `docs/MCP_GATEWAY.md` for the trust boundary, transport constraints, approval behavior, and
 server onboarding checklist. No MCP server is selected or enabled in the repository by default.
 
+The first reviewed development configuration uses DeepWiki for public GitHub repository research.
+Real configuration remains in ignored `mcp.servers.json`; the committed example contains the exact
+allowlist but keeps the server disabled. The chat agent supports bounded OpenAI-compatible tool
+calling and only exposes tools currently allowed by `ToolPolicy`.
+
 ## Development
 
 ```powershell

@@ -1,19 +1,32 @@
 {
   "servers": [
     {
-      "name": "remote_example",
+      "name": "deepwiki",
       "enabled": false,
       "transport": "streamable_http",
-      "url": "https://mcp.example.com/mcp",
-      "headers_from_env": {
-        "Authorization": "REMOTE_MCP_AUTHORIZATION"
-      },
+      "url": "https://mcp.deepwiki.com/mcp",
       "tools": {
-        "search": {
-          "description": "Search the reviewed remote research catalog",
+        "read_wiki_structure": {
+          "description": "Read the documentation structure for a public GitHub repository",
           "risk": "read",
           "capability": "research",
-          "timeout_seconds": 30,
+          "timeout_seconds": 45,
+          "idempotent": true,
+          "requires_network": true
+        },
+        "read_wiki_contents": {
+          "description": "Read documentation content for a public GitHub repository",
+          "risk": "read",
+          "capability": "research",
+          "timeout_seconds": 45,
+          "idempotent": true,
+          "requires_network": true
+        },
+        "ask_question": {
+          "description": "Ask a grounded question about a public GitHub repository",
+          "risk": "compute",
+          "capability": "research",
+          "timeout_seconds": 60,
           "idempotent": true,
           "requires_network": true
         }

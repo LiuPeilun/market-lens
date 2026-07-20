@@ -31,6 +31,9 @@ class McpClient(Protocol):
 
 
 class OfficialMcpClient:
+    def __init__(self, http_proxy: str | None = None) -> None:
+        self.http_proxy = http_proxy
+
     async def list_tools(self, server: McpServerConfig) -> list[types.Tool]:
         tools: list[types.Tool] = []
         cursor: str | None = None
@@ -78,6 +81,7 @@ class OfficialMcpClient:
                     headers=headers,
                     timeout=timeout,
                     follow_redirects=False,
+                    proxy=self.http_proxy,
                     trust_env=False,
                 ) as http_client:
                     async with streamable_http_client(

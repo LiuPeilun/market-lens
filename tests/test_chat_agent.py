@@ -3,6 +3,10 @@ from __future__ import annotations
 from datetime import date
 
 from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext, extract_asset_keyword
+from market_lens.agent.llm_client import LLMChatTurn, LLMToolCall
+from market_lens.tools.executor import ToolExecutor
+from market_lens.tools.models import ToolInput, ToolOutput, ToolSpec
+from market_lens.tools.registry import ToolRegistry
 from market_lens.types import AssetSearchResult
 
 
@@ -58,6 +62,11 @@ class FakeAnalysisAgent:
 
 
 class FakeLLMClient:
+    def complete_turn(self, messages, tools=None) -> LLMChatTurn:
+        assert messages
+        assert tools
+        return LLMChatTurn(content="LLM 生成的自然语言回答", tool_calls=[])
+
     def complete(self, messages: list[dict[str, str]]) -> str:
         assert messages
         return "LLM 生成的自然语言回答"
@@ -66,6 +75,43 @@ class FakeLLMClient:
         assert messages
         yield "流式"
         yield "回答"
+
+
+class ResearchInput(ToolInput):
+    repoName: str
+    question: str
+
+
+class ResearchOutput(ToolOutput):
+    answer: str
+
+
+class FakeToolCallingLLM:
+    def __init__(self) -> None:
+        self.turn = 0
+
+    def complete_turn(self, messages, tools=None) -> LLMChatTurn:
+        assert messages
+        assert tools
+        self.turn += 1
+        if self.turn == 1:
+            return LLMChatTurn(
+                content=None,
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-1",
+                        name="mcp__deepwiki__ask_question",
+                        arguments={
+                            "repoName": "modelcontextprotocol/servers",
+                            "question": "What is this repository?",
+                        },
+                    )
+                ],
+            )
+        return LLMChatTurn(content="这是经过工具结果支撑的仓库说明。", tool_calls=[])
+
+    def complete(self, messages) -> str:
+        raise AssertionError("Tool orchestration should use complete_turn")
 
 
 def test_extract_asset_keyword_from_question() -> None:
@@ -151,3 +197,43 @@ def test_chat_agent_streams_llm_answer() -> None:
     assert events[1] == {"type": "token", "delta": "流式"}
     assert events[2] == {"type": "token", "delta": "回答"}
     assert events[-1] == {"type": "done"}
+
+
+def test_chat_agent_uses_tools_for_general_repository_question() -> None:
+    def research_handler(raw_input, context) -> ResearchOutput:
+        del context
+        value = ResearchInput.model_validate(raw_input)
+        return ResearchOutput(answer=f"Documentation for {value.repoName}")
+
+    executor = ToolExecutor(
+        ToolRegistry(
+            [
+                ToolSpec(
+                    name="mcp.deepwiki.ask_question",
+                    capability="research",
+                    description="Ask a repository question",
+                    input_model=ResearchInput,
+                    output_model=ResearchOutput,
+                    handler=research_handler,
+                )
+            ]
+        )
+    )
+    agent = ChatAgent(
+        data_client=FakeDataClient(),
+        analysis_agent=FakeAnalysisAgent(),
+        llm_client=FakeToolCallingLLM(),
+        tool_executor=executor,
+        use_llm=True,
+    )
+
+    result = agent.reply(
+        message="modelcontextprotocol/servers 仓库是做什么的？",
+        context=None,
+        start=date(2026, 1, 1),
+        end=date(2026, 7, 20),
+    )
+
+    assert result["intent"] == "general_query"
+    assert result["answer"] == "这是经过工具结果支撑的仓库说明。"
+    assert result["citations"] == ["工具调用：mcp.deepwiki.ask_question（success）"]

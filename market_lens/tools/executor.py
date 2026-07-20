@@ -56,6 +56,14 @@ class ToolExecutor:
         self.policy = policy or ToolPolicy()
         self.audit_recorder = audit_recorder
 
+    def allowed_schemas(self, context: ToolContext | None = None) -> list[dict[str, Any]]:
+        invocation_context = context or ToolContext()
+        return [
+            spec.schema()
+            for spec in self.registry.list()
+            if self.policy.evaluate(spec, invocation_context).decision is PolicyDecision.ALLOW
+        ]
+
     def execute(
         self,
         tool_name: str,

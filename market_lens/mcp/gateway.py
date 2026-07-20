@@ -70,6 +70,10 @@ class McpGateway:
         with self._lock:
             return bool(self._tools)
 
+    def has_started(self) -> bool:
+        with self._lock:
+            return self._started
+
     def start(self) -> None:
         anyio.run(self.astart)
 
@@ -77,7 +81,9 @@ class McpGateway:
         with self._lock:
             if self._started:
                 return
+        await self.arefresh()
 
+    async def arefresh(self) -> None:
         discovered: dict[str, tuple[McpServerConfig, types.Tool, McpToolPolicy]] = {}
         errors: dict[str, str] = {}
         for server in self.config.servers:
@@ -87,7 +93,10 @@ class McpGateway:
                 remote_tools = await self.client.list_tools(server)
                 self._bind_server_tools(server, remote_tools, discovered)
             except Exception as exc:
-                logger.exception("MCP server discovery failed: %s", server.name)
+                if isinstance(exc, McpClientError):
+                    logger.warning("MCP server discovery failed: %s: %s", server.name, exc)
+                else:
+                    logger.exception("MCP server discovery failed: %s", server.name)
                 errors[server.name] = str(exc)
                 if self.config.startup_strict:
                     raise McpGatewayError(

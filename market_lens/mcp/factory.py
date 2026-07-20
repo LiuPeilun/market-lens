@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from market_lens.config import settings
+from market_lens.mcp.client import OfficialMcpClient
 from market_lens.mcp.gateway import McpGateway, McpGatewayError
 from market_lens.mcp.models import McpGatewayConfig
 
@@ -18,7 +19,7 @@ def build_mcp_gateway() -> McpGateway:
         allow_insecure_local_http=settings.mcp_allow_insecure_local_http,
         startup_strict=settings.mcp_startup_strict,
     )
-    return McpGateway(config)
+    return McpGateway(config, client=OfficialMcpClient(http_proxy=settings.mcp_http_proxy))
 
 
 def load_mcp_config(
