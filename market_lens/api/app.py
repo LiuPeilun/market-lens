@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
@@ -22,22 +24,26 @@ from market_lens.api.schemas import (
     AssetSearchResponse,
     ChatRequest,
     ChatResponse,
+    ToolApprovalDecisionRequest,
 )
 from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
 from market_lens.mcp.factory import build_mcp_gateway
+from market_lens.sandbox.factory import build_sandbox_runner
 from market_lens.storage.supabase import (
     AuthenticatedUser,
     SupabaseError,
     SupabaseRepository,
 )
 from market_lens.storage.tool_audit import SupabaseToolAuditRecorder
+from market_lens.storage.workspace import SupabaseWorkspaceStore
 from market_lens.tools.catalog import build_default_executor
 from market_lens.tools.executor import require_tool_data
-from market_lens.tools.models import ToolContext
+from market_lens.tools.models import ToolApprovalGrant, ToolContext
 
 mcp_gateway = build_mcp_gateway()
+sandbox_runner = build_sandbox_runner()
 
 
 async def maintain_mcp_discovery() -> None:
@@ -106,6 +112,9 @@ def health() -> dict[str, Any]:
         "mcp_available": mcp_gateway.is_available(),
         "mcp_status": mcp_status,
         "mcp_failed_servers": sorted(mcp_gateway.startup_errors),
+        "sandbox_available": sandbox_runner.is_available(),
+        "sandbox_backend": sandbox_runner.backend_name,
+        "approval_signing_key_configured": settings.tool_approval_signing_key_configured,
     }
 
 
@@ -276,6 +285,8 @@ def chat(
                 analysis_agent=analysis_agent,
                 audit_recorder=SupabaseToolAuditRecorder(repository, user),
                 mcp_gateway=mcp_gateway,
+                sandbox_runner=sandbox_runner,
+                workspace_store=SupabaseWorkspaceStore(repository, user, session_id),
             ),
             tool_context=ToolContext(user_id=user.id, session_id=session_id),
         )
@@ -334,6 +345,8 @@ def chat_stream(
                 analysis_agent=analysis_agent,
                 audit_recorder=SupabaseToolAuditRecorder(repository, user),
                 mcp_gateway=mcp_gateway,
+                sandbox_runner=sandbox_runner,
+                workspace_store=SupabaseWorkspaceStore(repository, user, session_id),
             ),
             tool_context=ToolContext(user_id=user.id, session_id=session_id),
         )
@@ -362,6 +375,16 @@ def chat_stream(
                     )
                     repository.update_chat_session(user, session_id, event.get("asset"))
                     event["session_id"] = str(session_id)
+                elif event.get("type") == "citations":
+                    citations = event.get("citations") or citations
+                elif event.get("type") == "approval_required":
+                    citations = event.get("citations") or citations
+                    event = save_tool_approval_event(
+                        repository,
+                        user,
+                        session_id,
+                        event,
+                    )
                 elif event.get("type") == "token":
                     answer_parts.append(str(event.get("delta") or ""))
                 elif event.get("type") == "done":
@@ -381,6 +404,152 @@ def chat_stream(
         except Exception as exc:
             payload = {"type": "error", "message": f"Chat stream failed: {exc}"}
             yield to_sse_data(payload)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/tool-approvals/{approval_id}/stream")
+def resume_tool_approval(
+    approval_id: UUID,
+    request: ToolApprovalDecisionRequest,
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> StreamingResponse:
+    repository = get_repository()
+    now = datetime.now(UTC)
+    try:
+        approval = repository.get_tool_approval(user, approval_id)
+        if approval is None:
+            raise HTTPException(status_code=404, detail="Tool approval was not found")
+        if not verify_tool_approval_signature(approval):
+            raise HTTPException(status_code=409, detail="Tool approval signature is invalid")
+        if approval.get("status") != "pending":
+            raise HTTPException(status_code=409, detail="Tool approval is no longer pending")
+        if _parse_timestamp(approval.get("expires_at")) <= now:
+            repository.transition_tool_approval(
+                user,
+                approval_id,
+                expected_status="pending",
+                status="expired",
+                expected_signature=str(approval["signature"]),
+                resolved_at=now,
+            )
+            raise HTTPException(status_code=409, detail="Tool approval has expired")
+
+        decision_status = "approved" if request.decision == "approve" else "denied"
+        approval = repository.transition_tool_approval(
+            user,
+            approval_id,
+            expected_status="pending",
+            status=decision_status,
+            expected_signature=str(approval["signature"]),
+            resolved_at=now,
+        )
+        if approval is None:
+            raise HTTPException(status_code=409, detail="Tool approval was already resolved")
+        if not verify_tool_approval_signature(approval):
+            raise HTTPException(status_code=409, detail="Tool approval signature is invalid")
+        session_id = UUID(str(approval["session_id"]))
+        client = get_client()
+        analysis_agent = MarketAnalysisAgent(client)
+        agent = ChatAgent(
+            data_client=client,
+            analysis_agent=analysis_agent,
+            tool_executor=build_default_executor(
+                data_client=client,
+                analysis_agent=analysis_agent,
+                audit_recorder=SupabaseToolAuditRecorder(repository, user),
+                mcp_gateway=mcp_gateway,
+                sandbox_runner=sandbox_runner,
+                workspace_store=SupabaseWorkspaceStore(repository, user, session_id),
+            ),
+            tool_context=ToolContext(
+                user_id=user.id,
+                session_id=session_id,
+                request_id=str(approval_id),
+            ),
+        )
+    except SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    approved = request.decision == "approve"
+    grant = None
+    if approved:
+        grant = ToolApprovalGrant(
+            approval_id=approval_id,
+            tool_name=str(approval["tool_name"]),
+            arguments_digest=str(approval["arguments_digest"]),
+        )
+
+    def event_stream():
+        answer_parts: list[str] = []
+        citations = list(approval.get("citations") or [])
+        try:
+            for event in agent.resume_stream(
+                approval["checkpoint"],
+                approved=approved,
+                grant=grant,
+            ):
+                event_type = event.get("type")
+                if event_type == "citations":
+                    citations = list(dict.fromkeys([*citations, *(event.get("citations") or [])]))
+                    event["citations"] = citations
+                elif event_type == "approval_required":
+                    if approved:
+                        repository.transition_tool_approval(
+                            user,
+                            approval_id,
+                            expected_status="approved",
+                            status="executed",
+                            expected_signature=str(approval["signature"]),
+                        )
+                    event = save_tool_approval_event(
+                        repository,
+                        user,
+                        session_id,
+                        event,
+                    )
+                elif event_type == "token":
+                    answer_parts.append(str(event.get("delta") or ""))
+                elif event_type == "done":
+                    repository.save_chat_message(
+                        user,
+                        session_id,
+                        "assistant",
+                        "".join(answer_parts),
+                        citations=citations,
+                    )
+                    if approved:
+                        repository.transition_tool_approval(
+                            user,
+                            approval_id,
+                            expected_status="approved",
+                            status="executed",
+                            expected_signature=str(approval["signature"]),
+                        )
+                    event["session_id"] = str(session_id)
+                elif event_type == "error" and approved:
+                    repository.transition_tool_approval(
+                        user,
+                        approval_id,
+                        expected_status="approved",
+                        status="failed",
+                        expected_signature=str(approval["signature"]),
+                    )
+                yield to_sse_data(event)
+        except Exception as exc:
+            if approved:
+                repository.transition_tool_approval(
+                    user,
+                    approval_id,
+                    expected_status="approved",
+                    status="failed",
+                    expected_signature=str(approval["signature"]),
+                )
+            yield to_sse_data({"type": "error", "message": f"Tool resumption failed: {exc}"})
 
     return StreamingResponse(
         event_stream(),
@@ -423,6 +592,118 @@ def chat_message_history(
     except SupabaseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"count": len(items), "items": items}
+
+
+def save_tool_approval_event(
+    repository: SupabaseRepository,
+    user: AuthenticatedUser,
+    session_id: UUID,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    pending = event.get("approval")
+    checkpoint = event.get("checkpoint")
+    if not isinstance(pending, dict) or not isinstance(checkpoint, dict):
+        raise ValueError("Tool approval event is invalid")
+    expires_at = datetime.now(UTC) + timedelta(seconds=settings.tool_approval_ttl_seconds)
+    approval_id = uuid4()
+    signature_payload = {
+        "id": str(approval_id),
+        "user_id": str(user.id),
+        "session_id": str(session_id),
+        "tool_name": str(pending["tool_name"]),
+        "tool_alias": str(pending["tool_alias"]),
+        "tool_call_id": str(pending["tool_call_id"]),
+        "risk_level": str(pending["risk"]),
+        "execution_target": str(pending["execution_target"]),
+        "reason": str(pending["reason"]),
+        "input_summary": dict(pending.get("input_summary") or {}),
+        "arguments_digest": str(pending["arguments_digest"]),
+        "checkpoint": checkpoint,
+        "citations": list(event.get("citations") or []),
+        "expires_at": expires_at.isoformat(),
+    }
+    signature = _sign_tool_approval(signature_payload)
+    row = repository.create_tool_approval(
+        user,
+        session_id,
+        approval_id=approval_id,
+        tool_name=str(pending["tool_name"]),
+        tool_alias=str(pending["tool_alias"]),
+        tool_call_id=str(pending["tool_call_id"]),
+        risk_level=str(pending["risk"]),
+        execution_target=str(pending["execution_target"]),
+        reason=str(pending["reason"]),
+        input_summary=dict(pending.get("input_summary") or {}),
+        arguments_digest=str(pending["arguments_digest"]),
+        checkpoint=checkpoint,
+        citations=list(event.get("citations") or []),
+        signature=signature,
+        expires_at=expires_at,
+    )
+    return {
+        "type": "approval_required",
+        "session_id": str(session_id),
+        "citations": list(event.get("citations") or []),
+        "approval": {
+            "id": str(row["id"]),
+            "tool_name": row["tool_name"],
+            "risk_level": row["risk_level"],
+            "execution_target": row["execution_target"],
+            "reason": row["reason"],
+            "input_summary": row.get("input_summary") or {},
+            "status": row["status"],
+            "expires_at": row["expires_at"],
+        },
+    }
+
+
+def _parse_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=409, detail="Tool approval expiration is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Tool approval expiration is invalid") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def verify_tool_approval_signature(row: dict[str, Any]) -> bool:
+    try:
+        payload = {
+            "id": str(row["id"]),
+            "user_id": str(row["user_id"]),
+            "session_id": str(row["session_id"]),
+            "tool_name": str(row["tool_name"]),
+            "tool_alias": str(row["tool_alias"]),
+            "tool_call_id": str(row["tool_call_id"]),
+            "risk_level": str(row["risk_level"]),
+            "execution_target": str(row["execution_target"]),
+            "reason": str(row["reason"]),
+            "input_summary": dict(row.get("input_summary") or {}),
+            "arguments_digest": str(row["arguments_digest"]),
+            "checkpoint": dict(row["checkpoint"]),
+            "citations": list(row.get("citations") or []),
+            "expires_at": _parse_timestamp(row["expires_at"]).isoformat(),
+        }
+        expected = _sign_tool_approval(payload)
+        supplied = str(row["signature"])
+    except (HTTPException, KeyError, TypeError, ValueError):
+        return False
+    return hmac.compare_digest(expected, supplied)
+
+
+def _sign_tool_approval(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hmac.new(
+        settings.tool_approval_signing_key.encode("utf-8"),
+        encoded,
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def save_chat_analysis(

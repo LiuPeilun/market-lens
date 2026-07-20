@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 load_dotenv(".env.local", override=True)
+
+_EPHEMERAL_APPROVAL_SIGNING_KEY = secrets.token_urlsafe(32)
+_CONFIGURED_APPROVAL_SIGNING_KEY = os.getenv("MARKET_LENS_TOOL_APPROVAL_SIGNING_KEY") or None
+if _CONFIGURED_APPROVAL_SIGNING_KEY and len(_CONFIGURED_APPROVAL_SIGNING_KEY.encode("utf-8")) < 32:
+    raise ValueError("MARKET_LENS_TOOL_APPROVAL_SIGNING_KEY must be at least 32 bytes")
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,13 @@ class Settings:
     llm_tool_result_max_chars: int = int(
         os.getenv("MARKET_LENS_LLM_TOOL_RESULT_MAX_CHARS", "40000")
     )
+    tool_approval_ttl_seconds: int = int(
+        os.getenv("MARKET_LENS_TOOL_APPROVAL_TTL_SECONDS", "600")
+    )
+    tool_approval_signing_key: str = (
+        _CONFIGURED_APPROVAL_SIGNING_KEY or _EPHEMERAL_APPROVAL_SIGNING_KEY
+    )
+    tool_approval_signing_key_configured: bool = bool(_CONFIGURED_APPROVAL_SIGNING_KEY)
 
     @property
     def supabase_configured(self) -> bool:

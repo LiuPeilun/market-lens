@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from time import sleep
 from typing import Any
+from uuid import UUID
 
 import pytest
 from pydantic import BaseModel
 
-from market_lens.tools.executor import ToolExecutor, ToolPublicError
+from market_lens.tools.executor import ToolExecutor, ToolPublicError, tool_arguments_digest
 from market_lens.tools.models import (
     ExecutionTarget,
     PolicyDecision,
+    ToolApprovalGrant,
     ToolContext,
     ToolInput,
     ToolOutput,
@@ -90,6 +92,29 @@ def test_default_policy_requires_confirmation_for_external_changes(risk: ToolRis
 
     assert result.status is ToolStatus.CONFIRMATION_REQUIRED
     assert result.error_code == "confirmation_required"
+
+
+def test_executor_approval_is_bound_to_tool_and_exact_arguments() -> None:
+    executor = ToolExecutor(ToolRegistry([make_spec(risk=ToolRisk.WRITE)]))
+    grant = ToolApprovalGrant(
+        approval_id=UUID("22222222-2222-2222-2222-222222222222"),
+        tool_name="test.echo",
+        arguments_digest=tool_arguments_digest({"value": "approved"}),
+    )
+
+    approved = executor.execute(
+        "test.echo",
+        {"value": "approved"},
+        approval=grant,
+    )
+    changed = executor.execute(
+        "test.echo",
+        {"value": "changed"},
+        approval=grant,
+    )
+
+    assert approved.status is ToolStatus.SUCCESS
+    assert changed.status is ToolStatus.CONFIRMATION_REQUIRED
 
 
 def test_default_policy_denies_destructive_tools() -> None:

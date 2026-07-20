@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -94,6 +95,45 @@ class SupabaseRESTClient:
         if isinstance(rows, list) and rows:
             return rows[0]
         return None
+
+    def update_where(
+        self,
+        table: str,
+        access_token: str,
+        params: dict[str, str],
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        rows = self._request(
+            "PATCH",
+            f"/rest/v1/{table}",
+            access_token=access_token,
+            params=params,
+            json=payload,
+            prefer="return=representation",
+        )
+        if isinstance(rows, list) and rows:
+            return rows[0]
+        return None
+
+    def upsert(
+        self,
+        table: str,
+        access_token: str,
+        payload: dict[str, Any],
+        *,
+        on_conflict: str,
+    ) -> dict[str, Any]:
+        rows = self._request(
+            "POST",
+            f"/rest/v1/{table}",
+            access_token=access_token,
+            params={"on_conflict": on_conflict},
+            json=payload,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        if not isinstance(rows, list) or not rows:
+            raise SupabaseError(f"Supabase did not return the upserted {table} row")
+        return rows[0]
 
     def _request(
         self,
@@ -276,6 +316,145 @@ class SupabaseRepository:
                 "input_summary": input_summary,
                 "error_code": error_code,
             },
+        )
+
+    def create_tool_approval(
+        self,
+        user: AuthenticatedUser,
+        session_id: UUID,
+        *,
+        approval_id: UUID,
+        tool_name: str,
+        tool_alias: str,
+        tool_call_id: str,
+        risk_level: str,
+        execution_target: str,
+        reason: str,
+        input_summary: dict[str, Any],
+        arguments_digest: str,
+        checkpoint: dict[str, Any],
+        citations: list[str],
+        signature: str,
+        expires_at: datetime,
+    ) -> dict[str, Any]:
+        return self.client.insert(
+            "tool_approvals",
+            user.access_token,
+            {
+                "id": str(approval_id),
+                "user_id": str(user.id),
+                "session_id": str(session_id),
+                "tool_name": tool_name,
+                "tool_alias": tool_alias,
+                "tool_call_id": tool_call_id,
+                "risk_level": risk_level,
+                "execution_target": execution_target,
+                "status": "pending",
+                "reason": reason,
+                "input_summary": input_summary,
+                "arguments_digest": arguments_digest,
+                "checkpoint": checkpoint,
+                "citations": citations,
+                "signature": signature,
+                "expires_at": expires_at.isoformat(),
+            },
+        )
+
+    def get_tool_approval(
+        self,
+        user: AuthenticatedUser,
+        approval_id: UUID,
+    ) -> dict[str, Any] | None:
+        rows = self.client.select(
+            "tool_approvals",
+            user.access_token,
+            {
+                "select": "*",
+                "id": f"eq.{approval_id}",
+                "user_id": f"eq.{user.id}",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def transition_tool_approval(
+        self,
+        user: AuthenticatedUser,
+        approval_id: UUID,
+        *,
+        expected_status: str,
+        status: str,
+        expected_signature: str,
+        resolved_at: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"status": status}
+        if resolved_at is not None:
+            payload["resolved_at"] = resolved_at.isoformat()
+        return self.client.update_where(
+            "tool_approvals",
+            user.access_token,
+            {
+                "id": f"eq.{approval_id}",
+                "user_id": f"eq.{user.id}",
+                "status": f"eq.{expected_status}",
+                "signature": f"eq.{expected_signature}",
+            },
+            payload,
+        )
+
+    def list_workspace_files(
+        self,
+        user: AuthenticatedUser,
+        session_id: UUID,
+    ) -> list[dict[str, Any]]:
+        return self.client.select(
+            "workspace_files",
+            user.access_token,
+            {
+                "select": "id,path,size_bytes,content_type,created_at,updated_at",
+                "user_id": f"eq.{user.id}",
+                "session_id": f"eq.{session_id}",
+                "order": "path.asc",
+            },
+        )
+
+    def get_workspace_file(
+        self,
+        user: AuthenticatedUser,
+        session_id: UUID,
+        path: str,
+    ) -> dict[str, Any] | None:
+        rows = self.client.select(
+            "workspace_files",
+            user.access_token,
+            {
+                "select": "id,path,content,size_bytes,content_type,created_at,updated_at",
+                "user_id": f"eq.{user.id}",
+                "session_id": f"eq.{session_id}",
+                "path": f"eq.{path}",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
+    def write_workspace_file(
+        self,
+        user: AuthenticatedUser,
+        session_id: UUID,
+        path: str,
+        content: str,
+    ) -> dict[str, Any]:
+        return self.client.upsert(
+            "workspace_files",
+            user.access_token,
+            {
+                "user_id": str(user.id),
+                "session_id": str(session_id),
+                "path": path,
+                "content": content,
+                "content_type": "text/plain",
+            },
+            on_conflict="session_id,path",
         )
 
     def list_analyses(self, user: AuthenticatedUser, limit: int) -> list[dict[str, Any]]:

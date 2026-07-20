@@ -5,6 +5,7 @@ import type { EChartsOption } from 'echarts'
 import ReactECharts from 'echarts-for-react'
 import {
   Activity,
+  Check,
   Database,
   History as HistoryIcon,
   LogOut,
@@ -13,8 +14,10 @@ import {
   Search,
   Send,
   Server,
+  ShieldAlert,
   TrendingDown,
   TrendingUp,
+  X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -38,12 +41,15 @@ import {
   type AssetType,
   type AssetSearchResult,
   type AnalysisResult,
+  type ChatStreamEvent,
+  type ToolApproval,
   analyzeAsset,
   getFundNav,
   getHealth,
   getStockHistory,
   getStockValuation,
   searchAssets,
+  resumeToolApproval,
   streamChatWithAgent,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
@@ -62,6 +68,9 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   citations?: string[]
+  approval?: ToolApproval & {
+    uiStatus?: 'pending' | 'resolving' | 'approved' | 'denied' | 'failed'
+  }
 }
 
 const defaultQuery: SubmittedQuery = {
@@ -266,6 +275,63 @@ export function DashboardPage() {
     }
   }
 
+  function handleChatStreamEvent(event: ChatStreamEvent, assistantMessageId: string) {
+    if (event.type === 'meta') {
+      if (event.session_id) setChatSessionId(event.session_id)
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId ? { ...item, citations: event.citations } : item,
+        ),
+      )
+      if (event.asset && event.analysis) {
+        setAssetType(event.asset.asset_type)
+        setCode(event.asset.code)
+        setSelectedAssetName(event.asset.name ?? event.analysis.name)
+        setChatAnalysis(event.analysis)
+        setSubmitted({
+          assetType: event.asset.asset_type,
+          code: event.asset.code,
+          end: end || undefined,
+          name: event.asset.name ?? event.analysis.name ?? undefined,
+          start,
+        })
+      }
+    } else if (event.type === 'citations') {
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId ? { ...item, citations: event.citations } : item,
+        ),
+      )
+    } else if (event.type === 'approval_required') {
+      setChatSessionId(event.session_id)
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                approval: { ...event.approval, uiStatus: 'pending' },
+                citations: event.citations,
+              }
+            : item,
+        ),
+      )
+    } else if (event.type === 'token') {
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? { ...item, content: `${item.content}${event.delta}` }
+            : item,
+        ),
+      )
+    } else if (event.type === 'error') {
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId ? { ...item, content: event.message } : item,
+        ),
+      )
+    }
+  }
+
   async function submitChat(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const message = chatInput.trim()
@@ -300,43 +366,7 @@ export function DashboardPage() {
           session_id: chatSessionId,
           start,
         },
-        (event) => {
-          if (event.type === 'meta') {
-            if (event.session_id) setChatSessionId(event.session_id)
-            setChatMessages((items) =>
-              items.map((item) =>
-                item.id === assistantMessageId ? { ...item, citations: event.citations } : item,
-              ),
-            )
-            if (event.asset && event.analysis) {
-              setAssetType(event.asset.asset_type)
-              setCode(event.asset.code)
-              setSelectedAssetName(event.asset.name ?? event.analysis.name)
-              setChatAnalysis(event.analysis)
-              setSubmitted({
-                assetType: event.asset.asset_type,
-                code: event.asset.code,
-                end: end || undefined,
-                name: event.asset.name ?? event.analysis.name ?? undefined,
-                start,
-              })
-            }
-          } else if (event.type === 'token') {
-            setChatMessages((items) =>
-              items.map((item) =>
-                item.id === assistantMessageId
-                  ? { ...item, content: `${item.content}${event.delta}` }
-                  : item,
-              ),
-            )
-          } else if (event.type === 'error') {
-            setChatMessages((items) =>
-              items.map((item) =>
-                item.id === assistantMessageId ? { ...item, content: event.message } : item,
-              ),
-            )
-          }
-        },
+        (event) => handleChatStreamEvent(event, assistantMessageId),
       )
     } catch (error) {
       setChatMessages((items) =>
@@ -345,6 +375,61 @@ export function DashboardPage() {
             ? {
                 ...item,
                 content: error instanceof Error ? error.message : '问答请求失败。',
+              }
+            : item,
+        ),
+      )
+    } finally {
+      setIsChatBusy(false)
+    }
+  }
+
+  async function resolveToolApproval(
+    messageId: string,
+    approval: ToolApproval,
+    decision: 'approve' | 'deny',
+  ) {
+    if (isChatBusy) return
+    setIsChatBusy(true)
+    setChatMessages((items) =>
+      items.map((item) =>
+        item.id === messageId && item.approval?.id === approval.id
+          ? { ...item, approval: { ...item.approval, uiStatus: 'resolving' } }
+          : item,
+      ),
+    )
+    try {
+      let streamFailed = false
+      await resumeToolApproval(approval.id, decision, (event) => {
+        if (event.type === 'error') streamFailed = true
+        handleChatStreamEvent(event, messageId)
+      })
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === messageId && item.approval?.id === approval.id
+            ? {
+                ...item,
+                approval: {
+                  ...item.approval,
+                  status: streamFailed ? 'failed' : decision === 'approve' ? 'approved' : 'denied',
+                  uiStatus: streamFailed
+                    ? 'failed'
+                    : decision === 'approve'
+                      ? 'approved'
+                      : 'denied',
+                },
+              }
+            : item,
+        ),
+      )
+    } catch (error) {
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === messageId && item.approval?.id === approval.id
+            ? {
+                ...item,
+                approval: { ...item.approval, uiStatus: 'pending' },
+                content: error instanceof Error ? error.message : '审批请求失败。',
               }
             : item,
         ),
@@ -532,6 +617,7 @@ export function DashboardPage() {
         messages={chatMessages}
         onChangeInput={setChatInput}
         onNewChat={startNewChat}
+        onResolveApproval={resolveToolApproval}
         onSubmit={submitChat}
       />
 
@@ -575,6 +661,7 @@ function ChatPanel({
   messages,
   onChangeInput,
   onNewChat,
+  onResolveApproval,
   onSubmit,
 }: {
   input: string
@@ -582,6 +669,11 @@ function ChatPanel({
   messages: ChatMessage[]
   onChangeInput: (value: string) => void
   onNewChat: () => void
+  onResolveApproval: (
+    messageId: string,
+    approval: ToolApproval,
+    decision: 'approve' | 'deny',
+  ) => void
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
   return (
@@ -606,6 +698,56 @@ function ChatPanel({
               key={message.id}
             >
               <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+              {message.approval ? (
+                <div className="mt-3 grid gap-3 border-t pt-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ShieldAlert className="size-4 text-amber-600" />
+                    <span className="font-medium">工具执行审批</span>
+                    <Badge variant="outline">{formatRiskLevel(message.approval.risk_level)}</Badge>
+                    <Badge variant="secondary">
+                      {formatExecutionTarget(message.approval.execution_target)}
+                    </Badge>
+                  </div>
+                  <div className="grid gap-1 text-xs text-muted-foreground">
+                    <div className="font-mono text-foreground">{message.approval.tool_name}</div>
+                    <div>{message.approval.reason}</div>
+                  </div>
+                  <pre className="max-h-36 overflow-auto rounded bg-muted p-2 text-xs leading-relaxed">
+                    {JSON.stringify(message.approval.input_summary, null, 2)}
+                  </pre>
+                  {message.approval.uiStatus === 'pending' ? (
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        disabled={isBusy}
+                        onClick={() => onResolveApproval(message.id, message.approval!, 'deny')}
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                      >
+                        <X className="size-4" /> 拒绝
+                      </Button>
+                      <Button
+                        disabled={isBusy}
+                        onClick={() => onResolveApproval(message.id, message.approval!, 'approve')}
+                        size="sm"
+                        type="button"
+                      >
+                        <Check className="size-4" /> 批准一次
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      {message.approval.uiStatus === 'resolving'
+                        ? '正在处理审批…'
+                        : message.approval.uiStatus === 'failed'
+                          ? '本次调用执行失败'
+                        : message.approval.uiStatus === 'approved'
+                          ? '已批准本次调用'
+                          : '已拒绝本次调用'}
+                    </div>
+                  )}
+                </div>
+              ) : null}
               {message.citations?.length ? (
                 <div className="mt-2 grid gap-1 border-t pt-2 text-xs text-muted-foreground">
                   {message.citations.map((citation) => (
@@ -641,6 +783,26 @@ function ChatPanel({
       </CardContent>
     </Card>
   )
+}
+
+function formatRiskLevel(risk: ToolApproval['risk_level']) {
+  const labels: Record<ToolApproval['risk_level'], string> = {
+    compute: '计算',
+    destructive: '破坏性',
+    external_side_effect: '外部副作用',
+    read: '读取',
+    write: '写入/执行',
+  }
+  return labels[risk]
+}
+
+function formatExecutionTarget(target: ToolApproval['execution_target']) {
+  const labels: Record<ToolApproval['execution_target'], string> = {
+    remote_mcp: '远程 MCP',
+    sandbox_required: '隔离沙箱',
+    trusted_local: '本地可信进程',
+  }
+  return labels[target]
 }
 
 function inferSubmittedAssetType(code: string, selectedAssetType: AssetType): AssetType {

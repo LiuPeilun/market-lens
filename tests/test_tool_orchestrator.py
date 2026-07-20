@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -10,6 +11,7 @@ from market_lens.agent.tool_orchestrator import ToolOrchestrator
 from market_lens.tools.executor import ToolExecutor
 from market_lens.tools.models import (
     ExecutionTarget,
+    ToolApprovalGrant,
     ToolContext,
     ToolInput,
     ToolOutput,
@@ -96,20 +98,49 @@ def test_orchestrator_executes_tool_and_returns_follow_up_answer() -> None:
     assert "found:MCP" in tool_message["content"]
 
 
-def test_orchestrator_does_not_offer_confirmation_required_tools() -> None:
-    client = FakeLLMClient([])
+def test_orchestrator_pauses_and_resumes_confirmation_required_tool() -> None:
+    client = FakeLLMClient(
+        [
+            LLMChatTurn(
+                content=None,
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-approval",
+                        name="research__lookup",
+                        arguments={"query": "change"},
+                    )
+                ],
+            ),
+            LLMChatTurn(content="approved answer", tool_calls=[]),
+        ]
+    )
     executor = ToolExecutor(
         ToolRegistry([make_spec(ToolRisk.WRITE)]),
         ToolPolicy(),
     )
+    orchestrator = ToolOrchestrator(client, executor)
 
-    result = ToolOrchestrator(client, executor).run(
+    prepared = orchestrator.prepare_stream(
         [{"role": "user", "content": "Change it"}]
     )
+    assert prepared.approval is not None
+    assert prepared.checkpoint is not None
+    assert prepared.approval.tool_name == "research.lookup"
+    assert prepared.traces[-1].status == "confirmation_required"
 
-    assert result.answer == "direct answer"
-    assert result.traces == []
-    assert client.complete_calls == 1
+    resumed = orchestrator.resume_stream(
+        prepared.checkpoint,
+        approved=True,
+        grant=ToolApprovalGrant(
+            approval_id=UUID("22222222-2222-2222-2222-222222222222"),
+            tool_name=prepared.approval.tool_name,
+            arguments_digest=prepared.approval.arguments_digest,
+        ),
+    )
+
+    assert resumed.approval is None
+    assert resumed.traces[-1].status == "success"
+    assert "found:change" in resumed.messages[-1]["content"]
 
 
 def test_stream_preparation_executes_tools_before_final_stream() -> None:

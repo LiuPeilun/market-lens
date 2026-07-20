@@ -33,6 +33,17 @@ export interface ChatResponse {
   session_id: string | null
 }
 
+export interface ToolApproval {
+  id: string
+  tool_name: string
+  risk_level: 'read' | 'compute' | 'write' | 'external_side_effect' | 'destructive'
+  execution_target: 'trusted_local' | 'sandbox_required' | 'remote_mcp'
+  reason: string
+  input_summary: Record<string, unknown>
+  status: 'pending' | 'approved' | 'denied' | 'executed' | 'failed' | 'expired'
+  expires_at: string
+}
+
 export type ChatStreamEvent =
   | {
       type: 'meta'
@@ -44,6 +55,13 @@ export type ChatStreamEvent =
       session_id?: string
     }
   | { type: 'token'; delta: string }
+  | { type: 'citations'; citations: string[] }
+  | {
+      type: 'approval_required'
+      approval: ToolApproval
+      citations: string[]
+      session_id: string
+    }
   | { type: 'done'; session_id?: string }
   | { type: 'error'; message: string }
 
@@ -214,6 +232,36 @@ export async function streamChatWithAgent(
     throw new Error(body?.detail ?? `Request failed with ${response.status}`)
   }
 
+  await consumeChatStream(response, onEvent)
+}
+
+export async function resumeToolApproval(
+  approvalId: string,
+  decision: 'approve' | 'deny',
+  onEvent: (event: ChatStreamEvent) => void,
+) {
+  const accessToken = await getAccessToken()
+  const response = await fetch(`/api/tool-approvals/${approvalId}/stream`, {
+    body: JSON.stringify({ decision }),
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    method: 'POST',
+  })
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.detail ?? `Request failed with ${response.status}`)
+  }
+
+  await consumeChatStream(response, onEvent)
+}
+
+async function consumeChatStream(
+  response: Response,
+  onEvent: (event: ChatStreamEvent) => void,
+) {
+  if (!response.body) throw new Error('Streaming response body is unavailable')
   const decoder = new TextDecoder()
   const reader = response.body.getReader()
   let buffer = ''

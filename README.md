@@ -264,6 +264,11 @@ Real configuration remains in ignored `mcp.servers.json`; the committed example 
 allowlist but keeps the server disabled. The chat agent supports bounded OpenAI-compatible tool
 calling and only exposes tools currently allowed by `ToolPolicy`.
 
+Approval-gated tools pause the chat stream and resume only after a one-time user decision. See
+`docs/TOOL_APPROVALS.md` for the signed approval state machine and sandboxed Python limits. Apply
+all Supabase migrations before enabling this flow, and configure a stable
+`MARKET_LENS_TOOL_APPROVAL_SIGNING_KEY` outside development.
+
 ## Development
 
 ```powershell

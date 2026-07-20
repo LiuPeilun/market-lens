@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any, Literal
 
@@ -19,7 +19,7 @@ from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, is_a_share_symbol
 from market_lens.tools.catalog import build_default_executor
 from market_lens.tools.executor import ToolExecutor, require_tool_data
-from market_lens.tools.models import ToolContext
+from market_lens.tools.models import ToolApprovalGrant, ToolContext
 from market_lens.types import AssetType
 from market_lens.valuation.metrics import format_pct
 
@@ -194,6 +194,15 @@ class ChatAgent:
                 self.tool_context,
             ).prepare_stream(prepared.llm_messages)
             prepared.citations.extend(_tool_citations(orchestration.traces))
+            if orchestration.approval is not None:
+                yield {
+                    "type": "approval_required",
+                    "approval": asdict(orchestration.approval),
+                    "checkpoint": orchestration.checkpoint,
+                    "citations": prepared.citations,
+                }
+                return
+            yield {"type": "citations", "citations": prepared.citations}
             emitted = False
             for delta in self.llm_client.stream_complete(orchestration.messages):
                 emitted = True
@@ -203,6 +212,36 @@ class ChatAgent:
         except LLMError:
             prepared.citations.append("LLM 流式生成失败，已回退到规则模板回答。")
             yield {"type": "token", "delta": prepared.answer}
+        yield {"type": "done"}
+
+    def resume_stream(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        approved: bool,
+        grant: ToolApprovalGrant | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        try:
+            orchestration = ToolOrchestrator(
+                self.llm_client,
+                self.tool_executor,
+                self.tool_context,
+            ).resume_stream(checkpoint, approved=approved, grant=grant)
+            citations = _tool_citations(orchestration.traces)
+            if orchestration.approval is not None:
+                yield {
+                    "type": "approval_required",
+                    "approval": asdict(orchestration.approval),
+                    "checkpoint": orchestration.checkpoint,
+                    "citations": citations,
+                }
+                return
+            yield {"type": "citations", "citations": citations}
+            for delta in self.llm_client.stream_complete(orchestration.messages):
+                yield {"type": "token", "delta": delta}
+        except LLMError as exc:
+            yield {"type": "error", "message": str(exc)}
+            return
         yield {"type": "done"}
 
     def _generate_answer(
@@ -220,7 +259,7 @@ class ChatAgent:
                 self.tool_context,
             ).run(llm_messages)
             citations.extend(_tool_citations(result.traces))
-            return result.answer
+            return result.answer or template_answer
         except LLMError:
             citations.append("LLM 生成失败，已回退到规则模板回答。")
             return template_answer

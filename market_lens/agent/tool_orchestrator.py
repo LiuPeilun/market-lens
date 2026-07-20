@@ -3,13 +3,28 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
-from market_lens.agent.llm_client import LLMChatTurn, LLMError, OpenAICompatibleLLMClient
+from market_lens.agent.llm_client import (
+    LLMChatTurn,
+    LLMError,
+    LLMToolCall,
+    OpenAICompatibleLLMClient,
+)
 from market_lens.config import settings
-from market_lens.tools.executor import ToolExecutor
-from market_lens.tools.models import ToolContext, ToolResult
+from market_lens.tools.executor import (
+    ToolExecutor,
+    summarize_arguments,
+    tool_arguments_digest,
+)
+from market_lens.tools.models import (
+    PolicyDecision,
+    ToolApprovalGrant,
+    ToolContext,
+    ToolResult,
+    ToolStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -20,15 +35,33 @@ class ToolTrace:
 
 
 @dataclass(frozen=True)
+class PendingToolApproval:
+    tool_name: str
+    tool_alias: str
+    tool_call_id: str
+    arguments: dict[str, Any]
+    arguments_digest: str
+    input_summary: dict[str, Any]
+    reason: str
+    risk: str
+    execution_target: str
+
+
+@dataclass(frozen=True)
 class OrchestrationResult:
-    answer: str
+    answer: str | None
     traces: list[ToolTrace]
+    approval: PendingToolApproval | None = None
+    checkpoint: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class StreamPreparation:
     messages: list[dict[str, Any]]
     traces: list[ToolTrace]
+    content: str | None = None
+    approval: PendingToolApproval | None = None
+    checkpoint: dict[str, Any] | None = None
 
 
 class ToolOrchestrator:
@@ -52,54 +85,144 @@ class ToolOrchestrator:
             raise ValueError("Tool orchestration limits must be greater than zero")
 
     def run(self, messages: list[dict[str, Any]]) -> OrchestrationResult:
-        working = [dict(message) for message in messages]
-        tools, alias_map = self._tool_catalog()
-        if not tools:
-            return OrchestrationResult(answer=self.llm_client.complete(working), traces=[])
-
-        traces: list[ToolTrace] = []
-        calls_used = 0
-        for _ in range(self.max_rounds):
-            turn = self.llm_client.complete_turn(working, tools)
-            if not turn.tool_calls:
-                if not turn.content:
-                    raise LLMError("LLM finished tool orchestration without an answer")
-                return OrchestrationResult(answer=turn.content, traces=traces)
-            calls_used = self._execute_turn(
-                working,
-                turn,
-                alias_map,
-                traces,
-                calls_used,
+        prepared = self._advance(
+            [dict(message) for message in messages],
+            traces=[],
+            calls_used=0,
+            rounds_used=0,
+        )
+        if prepared.approval is not None:
+            return OrchestrationResult(
+                answer=None,
+                traces=prepared.traces,
+                approval=prepared.approval,
+                checkpoint=prepared.checkpoint,
             )
-        raise LLMError("LLM tool orchestration exceeded its round limit")
+        if prepared.content:
+            return OrchestrationResult(answer=prepared.content, traces=prepared.traces)
+        turn = self.llm_client.complete_turn(prepared.messages)
+        if turn.tool_calls or not turn.content:
+            raise LLMError("LLM finished tool orchestration without an answer")
+        return OrchestrationResult(answer=turn.content, traces=prepared.traces)
 
     def prepare_stream(self, messages: list[dict[str, Any]]) -> StreamPreparation:
-        working = [dict(message) for message in messages]
+        return self._advance(
+            [dict(message) for message in messages],
+            traces=[],
+            calls_used=0,
+            rounds_used=0,
+        )
+
+    def resume_stream(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        approved: bool,
+        grant: ToolApprovalGrant | None = None,
+    ) -> StreamPreparation:
+        state = _parse_checkpoint(checkpoint)
+        pending = state["pending"]
+        messages = state["messages"]
+        traces = state["traces"]
+
+        if approved:
+            if grant is None:
+                raise LLMError("Approved tool resumption requires an approval grant")
+            result = self.tool_executor.execute(
+                pending.tool_name,
+                pending.arguments,
+                context=self.tool_context,
+                approval=grant,
+            )
+            if result.status is ToolStatus.CONFIRMATION_REQUIRED:
+                raise LLMError("Approval grant did not match the pending tool invocation")
+        else:
+            result = ToolResult(
+                tool_name=pending.tool_name,
+                status=ToolStatus.DENIED,
+                policy_decision=PolicyDecision.DENY,
+                error_code="user_denied",
+                message="The user denied this tool invocation",
+            )
+
+        traces.append(_trace_from_result(result))
+        messages.append(
+            _tool_message(
+                pending.tool_call_id,
+                pending.tool_alias,
+                _tool_result_payload(result),
+                self.max_result_chars,
+            )
+        )
+        for call in state["deferred_calls"]:
+            payload = {
+                "status": "denied",
+                "error_code": "parallel_call_deferred",
+                "message": "This parallel call was deferred while another call required approval",
+            }
+            traces.append(
+                ToolTrace(
+                    tool_name=call.name,
+                    status="denied",
+                    error_code="parallel_call_deferred",
+                )
+            )
+            messages.append(
+                _tool_message(call.id, call.name, payload, self.max_result_chars)
+            )
+
+        return self._advance(
+            messages,
+            traces=traces,
+            calls_used=state["calls_used"],
+            rounds_used=state["rounds_used"],
+        )
+
+    def _advance(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        traces: list[ToolTrace],
+        calls_used: int,
+        rounds_used: int,
+    ) -> StreamPreparation:
         tools, alias_map = self._tool_catalog()
         if not tools:
-            return StreamPreparation(messages=working, traces=[])
+            return StreamPreparation(messages=messages, traces=traces)
 
-        traces: list[ToolTrace] = []
-        calls_used = 0
-        for _ in range(self.max_rounds):
-            turn = self.llm_client.complete_turn(working, tools)
+        while rounds_used < self.max_rounds:
+            turn = self.llm_client.complete_turn(messages, tools)
+            rounds_used += 1
             if not turn.tool_calls:
-                return StreamPreparation(messages=working, traces=traces)
-            calls_used = self._execute_turn(
-                working,
+                return StreamPreparation(messages=messages, traces=traces, content=turn.content)
+            calls_used, approval, deferred_calls = self._execute_turn(
+                messages,
                 turn,
                 alias_map,
                 traces,
                 calls_used,
             )
+            if approval is not None:
+                return StreamPreparation(
+                    messages=messages,
+                    traces=traces,
+                    approval=approval,
+                    checkpoint=_checkpoint_payload(
+                        messages=messages,
+                        traces=traces,
+                        pending=approval,
+                        deferred_calls=deferred_calls,
+                        calls_used=calls_used,
+                        rounds_used=rounds_used,
+                    ),
+                )
         raise LLMError("LLM tool orchestration exceeded its round limit")
 
     def _tool_catalog(self) -> tuple[list[dict[str, Any]], dict[str, str]]:
         tools: list[dict[str, Any]] = []
         alias_map: dict[str, str] = {}
         used_aliases: set[str] = set()
-        for schema in self.tool_executor.allowed_schemas(self.tool_context):
+        for schema in self.tool_executor.offered_schemas(self.tool_context):
             public_name = str(schema["name"])
             alias = _tool_alias(public_name, used_aliases)
             used_aliases.add(alias)
@@ -123,11 +246,13 @@ class ToolOrchestrator:
         alias_map: dict[str, str],
         traces: list[ToolTrace],
         calls_used: int,
-    ) -> int:
+    ) -> tuple[int, PendingToolApproval | None, list[LLMToolCall]]:
         if calls_used + len(turn.tool_calls) > self.max_calls:
             raise LLMError("LLM tool orchestration exceeded its call limit")
+        calls_used += len(turn.tool_calls)
         messages.append(_assistant_tool_message(turn))
-        for call in turn.tool_calls:
+
+        for index, call in enumerate(turn.tool_calls):
             public_name = alias_map.get(call.name)
             if public_name is None:
                 payload = {
@@ -142,29 +267,39 @@ class ToolOrchestrator:
                         error_code="unknown_tool_alias",
                     )
                 )
-            else:
-                result = self.tool_executor.execute(
-                    public_name,
-                    call.arguments,
-                    context=self.tool_context,
-                )
-                payload = _tool_result_payload(result)
-                traces.append(
-                    ToolTrace(
-                        tool_name=public_name,
-                        status=result.status.value,
-                        error_code=result.error_code,
-                    )
-                )
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "name": call.name,
-                    "content": _bounded_json(payload, self.max_result_chars),
-                }
+                messages.append(_tool_message(call.id, call.name, payload, self.max_result_chars))
+                continue
+
+            result = self.tool_executor.execute(
+                public_name,
+                call.arguments,
+                context=self.tool_context,
             )
-        return calls_used + len(turn.tool_calls)
+            traces.append(_trace_from_result(result))
+            if result.status is ToolStatus.CONFIRMATION_REQUIRED:
+                spec = self.tool_executor.registry.get(public_name)
+                approval = PendingToolApproval(
+                    tool_name=public_name,
+                    tool_alias=call.name,
+                    tool_call_id=call.id,
+                    arguments=call.arguments,
+                    arguments_digest=tool_arguments_digest(call.arguments),
+                    input_summary=summarize_arguments(call.arguments),
+                    reason=result.message or "This tool requires user approval",
+                    risk=spec.risk.value,
+                    execution_target=spec.execution_target.value,
+                )
+                return calls_used, approval, turn.tool_calls[index + 1 :]
+
+            messages.append(
+                _tool_message(
+                    call.id,
+                    call.name,
+                    _tool_result_payload(result),
+                    self.max_result_chars,
+                )
+            )
+        return calls_used, None, []
 
 
 def _assistant_tool_message(turn: LLMChatTurn) -> dict[str, Any]:
@@ -185,6 +320,28 @@ def _assistant_tool_message(turn: LLMChatTurn) -> dict[str, Any]:
     }
 
 
+def _tool_message(
+    call_id: str,
+    alias: str,
+    payload: dict[str, Any],
+    max_chars: int,
+) -> dict[str, Any]:
+    return {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "name": alias,
+        "content": _bounded_json(payload, max_chars),
+    }
+
+
+def _trace_from_result(result: ToolResult) -> ToolTrace:
+    return ToolTrace(
+        tool_name=result.tool_name,
+        status=result.status.value,
+        error_code=result.error_code,
+    )
+
+
 def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
     return {
         "tool_name": result.tool_name,
@@ -192,6 +349,52 @@ def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
         "data": result.data,
         "error_code": result.error_code,
         "message": result.message,
+    }
+
+
+def _checkpoint_payload(
+    *,
+    messages: list[dict[str, Any]],
+    traces: list[ToolTrace],
+    pending: PendingToolApproval,
+    deferred_calls: list[LLMToolCall],
+    calls_used: int,
+    rounds_used: int,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "messages": messages,
+        "traces": [asdict(trace) for trace in traces],
+        "pending": asdict(pending),
+        "deferred_calls": [asdict(call) for call in deferred_calls],
+        "calls_used": calls_used,
+        "rounds_used": rounds_used,
+    }
+
+
+def _parse_checkpoint(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        if payload.get("version") != 1:
+            raise ValueError("unsupported version")
+        messages = payload["messages"]
+        if not isinstance(messages, list) or not all(isinstance(item, dict) for item in messages):
+            raise ValueError("invalid messages")
+        pending = PendingToolApproval(**payload["pending"])
+        traces = [ToolTrace(**item) for item in payload.get("traces", [])]
+        deferred = [LLMToolCall(**item) for item in payload.get("deferred_calls", [])]
+        calls_used = int(payload["calls_used"])
+        rounds_used = int(payload["rounds_used"])
+        if min(calls_used, rounds_used) < 0:
+            raise ValueError("invalid counters")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise LLMError("Stored tool approval checkpoint is invalid") from exc
+    return {
+        "messages": [dict(message) for message in messages],
+        "traces": traces,
+        "pending": pending,
+        "deferred_calls": deferred,
+        "calls_used": calls_used,
+        "rounds_used": rounds_used,
     }
 
 

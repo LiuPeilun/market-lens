@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 import httpx
@@ -53,10 +54,38 @@ def test_supabase_client_hides_auth_error_details() -> None:
 class FakeRESTClient:
     def __init__(self) -> None:
         self.inserts: list[tuple[str, str, dict[str, object]]] = []
+        self.updates: list[tuple[str, str, dict[str, str], dict[str, object]]] = []
+        self.upserts: list[tuple[str, str, dict[str, object], str]] = []
 
     def insert(self, table: str, access_token: str, payload: dict[str, object]):
         self.inserts.append((table, access_token, payload))
         return {"id": "22222222-2222-2222-2222-222222222222", **payload}
+
+    def update_where(
+        self,
+        table: str,
+        access_token: str,
+        params: dict[str, str],
+        payload: dict[str, object],
+    ):
+        self.updates.append((table, access_token, params, payload))
+        return {"id": "22222222-2222-2222-2222-222222222222", **payload}
+
+    def upsert(
+        self,
+        table: str,
+        access_token: str,
+        payload: dict[str, object],
+        *,
+        on_conflict: str,
+    ):
+        self.upserts.append((table, access_token, payload, on_conflict))
+        return {
+            "id": "44444444-4444-4444-4444-444444444444",
+            "size_bytes": len(str(payload["content"]).encode("utf-8")),
+            "updated_at": "2026-07-20T00:00:00+00:00",
+            **payload,
+        }
 
 
 def test_repository_saves_analysis_for_authenticated_user() -> None:
@@ -103,3 +132,66 @@ def test_repository_saves_tool_invocation_audit() -> None:
     assert payload["user_id"] == str(USER_ID)
     assert payload["tool_name"] == "finance.analyze_asset"
     assert payload["input_summary"] == {"code": "600519"}
+
+
+def test_repository_creates_and_atomically_transitions_tool_approval() -> None:
+    client = FakeRESTClient()
+    repository = SupabaseRepository(client=client)  # type: ignore[arg-type]
+    user = AuthenticatedUser(USER_ID, "user@example.com", "access-token")
+    session_id = UUID("33333333-3333-3333-3333-333333333333")
+    approval_id = UUID("22222222-2222-2222-2222-222222222222")
+
+    row = repository.create_tool_approval(
+        user,
+        session_id,
+        approval_id=approval_id,
+        tool_name="code.run_python",
+        tool_alias="code__run_python",
+        tool_call_id="call-1",
+        risk_level="write",
+        execution_target="sandbox_required",
+        reason="approval required",
+        input_summary={"code": "print(1)"},
+        arguments_digest="a" * 64,
+        checkpoint={"version": 1},
+        citations=[],
+        signature="b" * 64,
+        expires_at=datetime(2026, 7, 20, 12, 0, tzinfo=UTC),
+    )
+    transitioned = repository.transition_tool_approval(
+        user,
+        approval_id,
+        expected_status="pending",
+        status="approved",
+        expected_signature="b" * 64,
+        resolved_at=datetime(2026, 7, 20, 11, 55, tzinfo=UTC),
+    )
+
+    assert row["tool_name"] == "code.run_python"
+    assert transitioned["status"] == "approved"
+    table, _, params, payload = client.updates[0]
+    assert table == "tool_approvals"
+    assert params["status"] == "eq.pending"
+    assert params["signature"] == f"eq.{'b' * 64}"
+    assert payload["status"] == "approved"
+
+
+def test_repository_writes_workspace_file_with_session_path_conflict_key() -> None:
+    client = FakeRESTClient()
+    repository = SupabaseRepository(client=client)  # type: ignore[arg-type]
+    user = AuthenticatedUser(USER_ID, "user@example.com", "access-token")
+    session_id = UUID("33333333-3333-3333-3333-333333333333")
+
+    row = repository.write_workspace_file(
+        user,
+        session_id,
+        "notes/result.txt",
+        "valuation result",
+    )
+
+    table, token, payload, conflict = client.upserts[0]
+    assert table == "workspace_files"
+    assert token == "access-token"
+    assert conflict == "session_id,path"
+    assert payload["user_id"] == str(USER_ID)
+    assert row["path"] == "notes/result.txt"

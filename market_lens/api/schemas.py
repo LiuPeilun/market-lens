@@ -43,6 +43,10 @@ class ChatResponse(BaseModel):
     session_id: UUID | None = None
 
 
+class ToolApprovalDecisionRequest(BaseModel):
+    decision: Literal["approve", "deny"]
+
+
 class AssetSearchItem(BaseModel):
     asset_type: Literal["stock", "fund"]
     code: str

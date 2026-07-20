@@ -52,6 +52,14 @@ class ToolContext(BaseModel):
     request_id: str | None = None
 
 
+class ToolApprovalGrant(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    approval_id: UUID
+    tool_name: str
+    arguments_digest: str
+
+
 class PolicyEvaluation(BaseModel):
     model_config = ConfigDict(frozen=True)
 

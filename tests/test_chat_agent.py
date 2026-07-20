@@ -194,6 +194,8 @@ def test_chat_agent_streams_llm_answer() -> None:
 
     assert events[0]["type"] == "meta"
     assert events[0]["asset"]["code"] == "515450"
+    assert events[1]["type"] == "citations"
+    events.pop(1)
     assert events[1] == {"type": "token", "delta": "流式"}
     assert events[2] == {"type": "token", "delta": "回答"}
     assert events[-1] == {"type": "done"}

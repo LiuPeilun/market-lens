@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import date, datetime
@@ -11,6 +13,8 @@ from pydantic import BaseModel, ValidationError
 
 from market_lens.tools.models import (
     PolicyDecision,
+    PolicyEvaluation,
+    ToolApprovalGrant,
     ToolContext,
     ToolResult,
     ToolSpec,
@@ -64,11 +68,21 @@ class ToolExecutor:
             if self.policy.evaluate(spec, invocation_context).decision is PolicyDecision.ALLOW
         ]
 
+    def offered_schemas(self, context: ToolContext | None = None) -> list[dict[str, Any]]:
+        invocation_context = context or ToolContext()
+        return [
+            spec.schema()
+            for spec in self.registry.list()
+            if self.policy.evaluate(spec, invocation_context).decision
+            in {PolicyDecision.ALLOW, PolicyDecision.CONFIRMATION_REQUIRED}
+        ]
+
     def execute(
         self,
         tool_name: str,
         arguments: dict[str, Any],
         context: ToolContext | None = None,
+        approval: ToolApprovalGrant | None = None,
     ) -> ToolResult:
         started = monotonic()
         invocation_context = context or ToolContext()
@@ -100,6 +114,15 @@ class ToolExecutor:
             return result
 
         evaluation = self.policy.evaluate(spec, invocation_context)
+        if evaluation.decision is PolicyDecision.CONFIRMATION_REQUIRED and _grant_matches(
+            approval,
+            spec,
+            arguments,
+        ):
+            evaluation = PolicyEvaluation(
+                decision=PolicyDecision.ALLOW,
+                reason=f"User approved invocation {approval.approval_id}",
+            )
         if evaluation.decision is PolicyDecision.DENY:
             result = ToolResult(
                 tool_name=tool_name,
@@ -256,6 +279,28 @@ def _is_sensitive_key(key: str) -> bool:
         "refresh_token",
     }
     return normalized in sensitive_names or normalized.endswith(("_token", "_secret", "_key"))
+
+
+def tool_arguments_digest(arguments: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _grant_matches(
+    approval: ToolApprovalGrant | None,
+    spec: ToolSpec,
+    arguments: dict[str, Any],
+) -> bool:
+    return bool(
+        approval is not None
+        and approval.tool_name == spec.name
+        and approval.arguments_digest == tool_arguments_digest(arguments)
+    )
 
 
 def require_tool_data(result: ToolResult) -> dict[str, Any]:
