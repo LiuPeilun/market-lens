@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from math import isfinite
+from statistics import mean, pstdev
 from typing import Any
 
-from market_lens.types import StockValuationPoint
+from market_lens.types import StockFinancialIndicator, StockProfile, StockValuationPoint
 from market_lens.valuation.confidence import (
     calculate_confidence,
     conservative_overall_confidence,
@@ -15,7 +17,9 @@ from market_lens.valuation.scoring_config import (
     LEGACY_FUND_FACTOR_WEIGHTS,
     MODEL_VERSION,
     SCHEMA_VERSION,
-    STOCK_VALUATION_FACTORS,
+    STOCK_MODEL_CONFIGS,
+    StockModelConfig,
+    StockModelKey,
 )
 
 
@@ -26,34 +30,88 @@ def build_stock_assessment(
     retrieved_at: datetime,
     factor_data: dict[str, Any],
     industry_valuation: dict[str, Any],
+    financials: list[StockFinancialIndicator],
+    stock_profile: StockProfile | None,
 ) -> dict[str, Any]:
     latest = valuations[-1] if valuations else None
-    observations = {
-        definition.key: FactorObservation(
-            value=getattr(latest, definition.key, None) if latest else None,
-            history=tuple(getattr(item, definition.key, None) for item in valuations),
-            source="eastmoney_stock_valuation_history",
-            source_as_of=latest.date if latest else None,
-            status="available" if latest else "missing",
-            coverage=1.0 if latest else 0.0,
-        )
-        for definition in STOCK_VALUATION_FACTORS
-    }
-    scored = score_dimension(STOCK_VALUATION_FACTORS, observations)
-    freshness = freshness_component(analysis_as_of, latest.date if latest else None, 10)
-    confidence_detail = calculate_confidence(
+    routing = route_stock_model(factor_data, stock_profile)
+    model = STOCK_MODEL_CONFIGS[routing["profile"]]
+
+    valuation_observations = build_stock_valuation_observations(
+        model,
+        valuations,
+        industry_valuation,
+    )
+    valuation_scored = score_dimension(
+        model.valuation_factors,
+        valuation_observations,
+        minimum_effective_weight=model.minimum_valuation_weight,
+    )
+    valuation_confidence = calculate_confidence(
         {
             "source_success": 1.0 if latest else 0.0,
-            "freshness": freshness,
-            "factor_coverage": scored["weight_coverage"],
-            "data_coverage": scored["data_coverage"],
-            "sample_adequacy": scored["sample_adequacy"],
+            "freshness": freshness_component(
+                analysis_as_of,
+                latest.date if latest else None,
+                full_freshness_days=10,
+                decay_days=30,
+            ),
+            "factor_coverage": valuation_scored["weight_coverage"],
+            "data_coverage": valuation_scored["data_coverage"],
+            "sample_adequacy": valuation_scored["sample_adequacy"],
             "method_quality": 1.0,
         }
     )
-    dimension = build_dimension(scored, confidence_detail["score"])
-    dimensions = {"valuation": dimension, "quality": None, "product": None}
+
+    usable_financials = financial_rows_as_of(financials, analysis_as_of)
+    quality_observations = build_quality_observations(
+        model,
+        usable_financials,
+        factor_data,
+    )
+    quality_scored = score_dimension(
+        model.quality_factors,
+        quality_observations,
+        minimum_effective_weight=model.minimum_quality_weight,
+    )
     financial_diagnostic = factor_data.get("diagnostic") or {}
+    financial_status = str(financial_diagnostic.get("status") or "unavailable")
+    financial_source_as_of = (
+        usable_financials[-1].date if usable_financials else None
+    )
+    quality_confidence = calculate_confidence(
+        {
+            "source_success": source_status_component(financial_status),
+            "freshness": freshness_component(
+                analysis_as_of,
+                financial_source_as_of,
+                full_freshness_days=365,
+                decay_days=185,
+            ),
+            "factor_coverage": quality_scored["weight_coverage"],
+            "data_coverage": quality_scored["data_coverage"],
+            "sample_adequacy": quality_scored["sample_adequacy"],
+            "method_quality": 0.8,
+        }
+    )
+    valuation_dimension = build_dimension(
+        valuation_scored,
+        valuation_confidence["score"],
+        category="valuation",
+        model=f"{model.key}_valuation_v1",
+        extra_warnings=list(model.warnings),
+    )
+    quality_dimension = build_dimension(
+        quality_scored,
+        quality_confidence["score"],
+        category="quality",
+        model=f"{model.key}_quality_v1",
+    )
+    dimensions = {
+        "valuation": valuation_dimension,
+        "quality": quality_dimension,
+        "product": None,
+    }
     sources = [
         {
             "key": "stock_valuation_history",
@@ -75,17 +133,241 @@ def build_stock_assessment(
             "reason": industry_valuation.get("reason"),
         },
     ]
-    warnings = collect_warnings(scored, sources)
+    warnings = collect_warnings(valuation_scored, sources)
+    warnings.extend(quality_scored.get("warnings") or [])
+    warnings.extend(routing.get("warnings") or [])
+    warnings.extend(model.warnings)
+    confidence_detail = combine_dimension_confidence(
+        valuation_confidence,
+        quality_confidence,
+    )
     return build_assessment(
-        profile="generic_stock",
+        profile=model.key,
         analysis_as_of=analysis_as_of,
         dimensions=dimensions,
         confidence_detail=confidence_detail,
         sources=sources,
-        warnings=warnings,
+        warnings=list(dict.fromkeys(warnings)),
         source_as_of=latest.date if latest else None,
         retrieved_at=retrieved_at,
+        routing=routing,
     )
+
+
+def build_stock_valuation_observations(
+    model: StockModelConfig,
+    valuations: list[StockValuationPoint],
+    industry_valuation: dict[str, Any],
+) -> dict[str, FactorObservation]:
+    latest = valuations[-1] if valuations else None
+    observations: dict[str, FactorObservation] = {}
+    for definition in model.valuation_factors:
+        if definition.key.startswith("industry_"):
+            metric_key = "pe_ttm" if definition.key == "industry_pe_ttm" else "pb"
+            metric = (industry_valuation.get("metrics") or {}).get(metric_key) or {}
+            summary_status = str(industry_valuation.get("status") or "unavailable")
+            status = source_factor_status(summary_status, metric.get("percentile"))
+            sample_size = int(metric.get("valid_sample_size") or 0)
+            total_size = int(industry_valuation.get("sample_size") or 0)
+            observations[definition.key] = FactorObservation(
+                value=to_finite_float(metric.get("percentile")),
+                source="eastmoney_industry_valuation_snapshot",
+                source_as_of=parse_iso_date(industry_valuation.get("as_of")),
+                status=status,
+                sample_size=sample_size,
+                coverage=sample_size / total_size if total_size else 0.0,
+                warnings=tuple(
+                    str(value)
+                    for value in (metric.get("reason"), industry_valuation.get("reason"))
+                    if value
+                ),
+            )
+            continue
+
+        current = getattr(latest, definition.key, None) if latest else None
+        history = tuple(getattr(item, definition.key, None) for item in valuations)
+        observations[definition.key] = FactorObservation(
+            value=to_finite_float(current),
+            history=history,
+            source="eastmoney_stock_valuation_history",
+            source_as_of=latest.date if latest else None,
+            status="available" if latest else "missing",
+            coverage=1.0 if latest else 0.0,
+        )
+    return observations
+
+
+def build_quality_observations(
+    model: StockModelConfig,
+    financials: list[StockFinancialIndicator],
+    factor_data: dict[str, Any],
+) -> dict[str, FactorObservation]:
+    latest = financials[-1] if financials else None
+    diagnostic_status = str(
+        (factor_data.get("diagnostic") or {}).get("status") or "unavailable"
+    )
+    observations: dict[str, FactorObservation] = {}
+    for definition in model.quality_factors:
+        if definition.key == "roe_stability":
+            values = finite_attribute_values(financials, "roe_weighted")
+            value = roe_stability(values)
+            sample_size = len(values)
+        elif definition.key == "new_business_value_growth_pct":
+            base_values = finite_attribute_values(financials, "new_business_value_cny")
+            growth_values = growth_percentages(base_values)
+            value = growth_values[-1] if growth_values else None
+            sample_size = len(base_values)
+        else:
+            values = finite_attribute_values(financials, definition.key)
+            value = to_finite_float(getattr(latest, definition.key, None) if latest else None)
+            sample_size = len(values)
+
+        observations[definition.key] = FactorObservation(
+            value=value,
+            source="eastmoney_f10_key_financial_indicators",
+            source_as_of=latest.date if latest else None,
+            status=quality_factor_status(diagnostic_status, value),
+            sample_size=sample_size,
+            coverage=1.0 if value is not None else 0.0,
+        )
+    return observations
+
+
+def route_stock_model(
+    factor_data: dict[str, Any],
+    stock_profile: StockProfile | None,
+) -> dict[str, Any]:
+    financial_scope = str(factor_data.get("model_scope") or "unknown")
+    financial_profile = {
+        "general_non_financial": "generic_non_financial",
+        "bank": "bank",
+        "insurance": "insurance",
+        "securities": "securities",
+    }.get(financial_scope)
+    industry_values = [
+        stock_profile.em_industry if stock_profile else None,
+        stock_profile.csrc_industry if stock_profile else None,
+    ]
+    industry_text = " ".join(value for value in industry_values if value)
+    fallback_profile = industry_profile(industry_text)
+    warnings: list[str] = []
+
+    if financial_profile in STOCK_MODEL_CONFIGS:
+        selected = financial_profile
+        reason = "financial_org_type"
+        if fallback_profile != "generic_non_financial" and fallback_profile != selected:
+            warnings.append(
+                f"financial_industry_classification_conflict:{selected}!={fallback_profile}"
+            )
+    elif fallback_profile != "generic_non_financial":
+        selected = fallback_profile
+        reason = "industry_classification_fallback"
+        warnings.append("financial_org_type_unavailable")
+    else:
+        selected = "generic_non_financial"
+        reason = "generic_fallback"
+        if financial_scope == "unknown":
+            warnings.append("financial_org_type_unavailable")
+
+    return {
+        "profile": selected,
+        "reason": reason,
+        "financial_scope": financial_scope,
+        "em_industry": stock_profile.em_industry if stock_profile else None,
+        "csrc_industry": stock_profile.csrc_industry if stock_profile else None,
+        "warnings": warnings,
+    }
+
+
+def industry_profile(industry: str) -> StockModelKey:
+    normalized = industry.strip()
+    if "银行" in normalized:
+        return "bank"
+    if "保险" in normalized:
+        return "insurance"
+    if "证券" in normalized or "券商" in normalized:
+        return "securities"
+    return "generic_non_financial"
+
+
+def financial_rows_as_of(
+    financials: list[StockFinancialIndicator],
+    analysis_as_of: date | None,
+) -> list[StockFinancialIndicator]:
+    return [
+        item
+        for item in financials
+        if analysis_as_of is None
+        or (
+            item.date <= analysis_as_of
+            and (item.notice_date is None or item.notice_date <= analysis_as_of)
+        )
+    ]
+
+
+def finite_attribute_values(
+    rows: list[StockFinancialIndicator],
+    attribute: str,
+) -> list[float]:
+    return [
+        float(value)
+        for row in rows
+        if (value := getattr(row, attribute, None)) is not None and isfinite(value)
+    ]
+
+
+def growth_percentages(values: list[float]) -> list[float]:
+    return [
+        (current / previous - 1) * 100
+        for previous, current in zip(values, values[1:], strict=False)
+        if previous > 0 and current >= 0
+    ]
+
+
+def roe_stability(values: list[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    denominator = max(abs(mean(values)), 5.0)
+    return max(0.0, min(1.0, 1 - pstdev(values) / denominator))
+
+
+def quality_factor_status(status: str, value: float | None) -> str:
+    if status == "error":
+        return "error"
+    if status == "stale":
+        return "stale"
+    if status == "invalid":
+        return "invalid"
+    if value is None:
+        return "missing"
+    return "available"
+
+
+def source_factor_status(status: str, value: Any) -> str:
+    if status == "error":
+        return "error"
+    if status in {"invalid", "stale"}:
+        return status
+    if value is None and status in {"unavailable", "empty"}:
+        return "missing"
+    return "available"
+
+
+def source_status_component(status: str) -> float:
+    return {
+        "available": 1.0,
+        "partial": 0.75,
+        "stale": 0.25,
+        "invalid": 0.0,
+        "error": 0.0,
+        "unavailable": 0.0,
+    }.get(status, 0.0)
+
+
+def to_finite_float(value: Any) -> float | None:
+    if not isinstance(value, int | float) or not isfinite(value):
+        return None
+    return float(value)
 
 
 def build_fund_assessment(
@@ -159,18 +441,73 @@ def build_fund_assessment(
     )
 
 
-def build_dimension(scored: dict[str, Any], confidence: float) -> dict[str, Any]:
-    level = valuation_level(scored.get("score"))
+def build_dimension(
+    scored: dict[str, Any],
+    confidence: float,
+    *,
+    category: str,
+    model: str,
+    extra_warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    score = scored.get("score")
+    if category == "quality":
+        level, level_zh = quality_level(score)
+    else:
+        level = valuation_level(score)
+        level_zh = LEVEL_LABELS_ZH[level]
     return {
-        "score": scored.get("score"),
+        "model": model,
+        "score": score,
         "level": level,
-        "level_zh": LEVEL_LABELS_ZH[level],
+        "level_zh": level_zh,
         "confidence": confidence,
         "factors": scored.get("factors", []),
         "weight_coverage": scored.get("weight_coverage", 0.0),
         "data_coverage": scored.get("data_coverage", 0.0),
         "sample_adequacy": scored.get("sample_adequacy", 0.0),
-        "warnings": scored.get("warnings", []),
+        "warnings": list(
+            dict.fromkeys([*(scored.get("warnings") or []), *(extra_warnings or [])])
+        ),
+    }
+
+
+def quality_level(score: float | None) -> tuple[str, str]:
+    if score is None:
+        return "unknown", "未知"
+    if score >= 80:
+        return "very_high", "很高"
+    if score >= 60:
+        return "high", "较高"
+    if score >= 40:
+        return "moderate", "中等"
+    if score >= 20:
+        return "low", "较低"
+    return "very_low", "很低"
+
+
+def combine_dimension_confidence(
+    valuation: dict[str, Any],
+    quality: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "components": {
+            "valuation": valuation.get("score", 0.0),
+            "quality": quality.get("score", 0.0),
+        },
+        "caps": [
+            {"dimension": dimension, **cap}
+            for dimension, detail in (("valuation", valuation), ("quality", quality))
+            for cap in detail.get("caps", [])
+        ],
+        "reasons": [
+            f"{dimension}:{reason}"
+            for dimension, detail in (("valuation", valuation), ("quality", quality))
+            for reason in detail.get("reasons", [])
+        ],
+        "dimensions": {
+            "valuation": valuation,
+            "quality": quality,
+        },
     }
 
 
@@ -184,8 +521,9 @@ def build_assessment(
     warnings: list[str],
     source_as_of: date | None,
     retrieved_at: datetime,
+    routing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION,
         "model_version": MODEL_VERSION,
         "profile": profile,
@@ -201,6 +539,9 @@ def build_assessment(
             "retrieved_at": utc_isoformat(retrieved_at),
         },
     }
+    if routing is not None:
+        result["routing"] = routing
+    return result
 
 
 def standardize_legacy_factors(
@@ -219,7 +560,7 @@ def standardize_legacy_factors(
             "source_as_of": source_as_of.isoformat() if source_as_of else None,
             "score": item.get("score"),
             "direction": FUND_VALUATION_FACTOR_DIRECTIONS.get(
-                str(item.get("key") or ""), "lower_is_better"
+                str(item.get("key") or ""), "higher_value_higher_score"
             ),
             "normalization": "legacy_valuation_rule",
             "weight": float(item.get("weight") or 0.0),
@@ -251,7 +592,7 @@ def standardize_legacy_factors(
                 "source_as_of": source_as_of.isoformat() if source_as_of else None,
                 "score": None,
                 "direction": FUND_VALUATION_FACTOR_DIRECTIONS.get(
-                    str(key), "lower_is_better"
+                    str(key), "higher_value_higher_score"
                 ),
                 "normalization": "legacy_valuation_rule",
                 "weight": legacy_factor_weight(valuation, str(key)),
@@ -271,6 +612,7 @@ def freshness_component(
     analysis_as_of: date | None,
     source_as_of: date | None,
     full_freshness_days: int,
+    decay_days: int = 30,
 ) -> float:
     if analysis_as_of is None or source_as_of is None:
         return 0.0
@@ -279,7 +621,7 @@ def freshness_component(
         return 0.0
     if age <= full_freshness_days:
         return 1.0
-    return max(0.0, 1 - (age - full_freshness_days) / 30)
+    return max(0.0, 1 - (age - full_freshness_days) / decay_days)
 
 
 def fund_source_as_of(valuation: dict[str, Any]) -> date | None:

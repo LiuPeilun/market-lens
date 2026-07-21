@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from market_lens.types import FundNavPoint, StockBar, StockValuationPoint
+from market_lens.data.eastmoney import parse_stock_financial_indicator
+from market_lens.types import (
+    FundNavPoint,
+    StockBar,
+    StockIndustryValuationSnapshot,
+    StockProfile,
+    StockValuationPoint,
+)
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.assessment import build_fund_assessment
 from market_lens.valuation.confidence import (
@@ -30,7 +38,7 @@ def factor_definition(
     minimum_sample_size: int = 3,
     positive_only: bool = True,
     core: bool = False,
-    direction: str = "lower_is_better",
+    direction: str = "higher_value_higher_score",
 ) -> FactorDefinition:
     return FactorDefinition(
         key=key,
@@ -73,7 +81,7 @@ def test_factor_definition_rejects_invalid_configuration() -> None:
             category="valuation",
             unit="ratio",
             weight=1.0,
-            direction="higher_is_better",
+            direction="higher_value_higher_score",
             normalization="linear_anchor",
         )
 
@@ -190,7 +198,7 @@ def test_scoring_is_reproducible_for_same_version_and_input() -> None:
     first = score_dimension(definitions, observations)
     second = score_dimension(definitions, observations)
 
-    assert MODEL_VERSION == "valuation-v2.0.0-infrastructure"
+    assert MODEL_VERSION == "valuation-v2.1.0-stock-models"
     assert first == second
 
 
@@ -228,9 +236,12 @@ def test_stock_analysis_exposes_v2_assessment_and_legacy_fields() -> None:
     assert assessment["schema_version"] == SCHEMA_VERSION
     assert assessment["model_version"] == MODEL_VERSION
     assert assessment["dimensions"]["valuation"]["score"] == 100.0
-    assert assessment["dimensions"]["valuation"]["sample_adequacy"] == 0.21
+    assert assessment["dimensions"]["valuation"]["sample_adequacy"] == 0.1575
     assert assessment["dimensions"]["valuation"]["confidence"] < 1.0
-    assert assessment["dimensions"]["quality"] is None
+    quality = assessment["dimensions"]["quality"]
+    assert quality is not None
+    assert quality["score"] is None
+    assert quality["confidence"] == 0.0
     assert assessment["dimensions"]["product"] is None
     assert assessment["attractiveness"] is None
     assert result["valuation"]["score"] == 100.0
@@ -307,6 +318,258 @@ def test_index_proxy_assessment_standardizes_factors_and_applies_cap() -> None:
     assert dimension["factors"][0]["source"] == "tracked_index_price_history"
     assert assessment["confidence_detail"]["score"] <= 0.6
     assert assessment["attractiveness"] is None
+
+
+@pytest.mark.parametrize(
+    ("org_type", "expected_profile"),
+    [
+        ("通用", "generic_non_financial"),
+        ("银行", "bank"),
+        ("保险", "insurance"),
+        ("证券", "securities"),
+    ],
+)
+def test_stock_industry_models_route_and_score_quality(
+    org_type: str,
+    expected_profile: str,
+) -> None:
+    valuations = model_valuation_history(300)
+    bars = [make_bar(item.date, item.close or 0.0) for item in valuations]
+    result = analyze_stock(
+        "600000",
+        bars,
+        valuations,
+        profile=StockProfile(
+            code="600000",
+            name="Test",
+            em_industry="制造业",
+            csrc_industry="制造业",
+            security_type="A share",
+            raw={},
+        ),
+        financials=model_financial_history(org_type),
+        industry_valuation=model_industry_snapshot(valuations[-1].date),
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    assessment = result["assessment"]
+    quality = assessment["dimensions"]["quality"]
+    valuation = assessment["dimensions"]["valuation"]
+    assert assessment["profile"] == expected_profile
+    assert assessment["routing"]["reason"] == "financial_org_type"
+    assert quality["score"] is not None
+    assert quality["confidence"] > 0
+    assert quality["model"] == f"{expected_profile}_quality_v1"
+    assert valuation["model"] == f"{expected_profile}_valuation_v1"
+    assert assessment["dimensions"]["product"] is None
+    assert assessment["attractiveness"] is None
+
+
+def test_stock_model_routing_uses_industry_only_as_fallback() -> None:
+    valuations = model_valuation_history(300)
+    result = analyze_stock(
+        "600000",
+        [make_bar(item.date, item.close or 0.0) for item in valuations],
+        valuations,
+        profile=StockProfile(
+            code="600000",
+            name="Test Bank",
+            em_industry="银行",
+            csrc_industry="货币金融服务",
+            security_type="A share",
+            raw={},
+        ),
+        financials=[],
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    assessment = result["assessment"]
+    assert assessment["profile"] == "bank"
+    assert assessment["routing"]["reason"] == "industry_classification_fallback"
+    assert "financial_org_type_unavailable" in assessment["routing"]["warnings"]
+    assert assessment["dimensions"]["quality"]["score"] is None
+
+
+def test_financial_org_type_wins_over_conflicting_industry_classification() -> None:
+    valuations = model_valuation_history(300)
+    result = analyze_stock(
+        "600000",
+        [make_bar(item.date, item.close or 0.0) for item in valuations],
+        valuations,
+        profile=StockProfile(
+            code="600000",
+            name="Conflict",
+            em_industry="保险",
+            csrc_industry="保险业",
+            security_type="A share",
+            raw={},
+        ),
+        financials=model_financial_history("银行"),
+        industry_valuation=model_industry_snapshot(valuations[-1].date),
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    routing = result["assessment"]["routing"]
+    assert routing["profile"] == "bank"
+    assert routing["reason"] == "financial_org_type"
+    assert "financial_industry_classification_conflict:bank!=insurance" in routing["warnings"]
+
+
+def test_insurance_model_does_not_use_industry_percentiles_without_pev() -> None:
+    valuations = model_valuation_history(300)
+    result = analyze_stock(
+        "601318",
+        [make_bar(item.date, item.close or 0.0) for item in valuations],
+        valuations,
+        financials=model_financial_history("保险"),
+        industry_valuation=model_industry_snapshot(valuations[-1].date),
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    valuation = result["assessment"]["dimensions"]["valuation"]
+    assert [factor["key"] for factor in valuation["factors"]] == ["pb", "pe_ttm"]
+    assert "insurance_pev_unavailable" in valuation["warnings"]
+
+
+def test_industry_factors_require_ten_valid_samples() -> None:
+    valuations = model_valuation_history(300)
+    result = analyze_stock(
+        "600000",
+        [make_bar(item.date, item.close or 0.0) for item in valuations],
+        valuations,
+        financials=model_financial_history("通用"),
+        industry_valuation=model_industry_snapshot(valuations[-1].date, size=9),
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    factors = {
+        factor["key"]: factor
+        for factor in result["assessment"]["dimensions"]["valuation"]["factors"]
+    }
+    for key in ("industry_pe_ttm", "industry_pb"):
+        assert factors[key]["status"] == "available"
+        assert factors[key]["eligible"] is False
+        assert factors[key]["sample_size"] == 9
+        assert factors[key]["minimum_sample_size"] == 10
+        assert "insufficient_industry_sample" in factors[key]["warnings"]
+
+
+def test_quality_changes_do_not_rewrite_valuation_dimension() -> None:
+    valuations = model_valuation_history(300)
+    bars = [make_bar(item.date, item.close or 0.0) for item in valuations]
+    high_quality = model_financial_history("通用")
+    low_quality = [
+        replace(
+            row,
+            roe_weighted=5.0,
+            roic_pct=5.0,
+            parent_netprofit_growth_pct=-20.0,
+            revenue_growth_pct=-10.0,
+        )
+        for row in high_quality
+    ]
+    common = {
+        "industry_valuation": model_industry_snapshot(valuations[-1].date),
+        "retrieved_at": datetime(2026, 7, 21, tzinfo=UTC),
+    }
+
+    high_result = analyze_stock(
+        "600000", bars, valuations, financials=high_quality, **common
+    )
+    low_result = analyze_stock(
+        "600000", bars, valuations, financials=low_quality, **common
+    )
+
+    high_assessment = high_result["assessment"]
+    low_assessment = low_result["assessment"]
+    assert high_assessment["dimensions"]["valuation"] == low_assessment["dimensions"]["valuation"]
+    high_quality_score = high_assessment["dimensions"]["quality"]["score"]
+    low_quality_score = low_assessment["dimensions"]["quality"]["score"]
+    assert high_quality_score > low_quality_score
+    assert high_result["valuation"]["score"] == low_result["valuation"]["score"]
+
+
+def model_valuation_history(size: int) -> list[StockValuationPoint]:
+    start = date(2025, 1, 1)
+    return [make_valuation(start + timedelta(days=index), index + 1) for index in range(size)]
+
+
+def model_financial_history(org_type: str) -> list:
+    rows = []
+    for index, year in enumerate(range(2020, 2025), start=1):
+        row = {
+            "REPORT_DATE": f"{year}-12-31",
+            "NOTICE_DATE": f"{year + 1}-03-31",
+            "REPORT_TYPE": "年报",
+            "ORG_TYPE": org_type,
+            "ROEJQ": 8 + index,
+            "ROEKCJQ": 7.5 + index,
+            "PARENTNETPROFITTZ": -5 + index * 4,
+            "TOTALOPERATEREVETZ": -2 + index * 3,
+        }
+        if org_type == "通用":
+            row.update({"ROIC": 9 + index})
+        elif org_type == "银行":
+            row.update(
+                {
+                    "NET_INTEREST_MARGIN": 1.5 + index / 10,
+                    "NET_INTEREST_SPREAD": 1.4 + index / 10,
+                    "NONPERLOAN": 1.4 - index / 20,
+                    "BLDKBBL": 220 + index * 20,
+                    "NEWCAPITALADER": 13 + index / 2,
+                    "FIRST_ADEQUACY_RATIO": 11 + index / 2,
+                    "HXYJBCZL": 9 + index / 2,
+                }
+            )
+        elif org_type == "保险":
+            row.update(
+                {
+                    "SOLVENCY_AR": 160 + index * 5,
+                    "NBV_LIFE": 10_000_000_000 * (1 + index / 10),
+                    "NBV_RATE": 18 + index * 2,
+                }
+            )
+        elif org_type == "证券":
+            row.update(
+                {
+                    "RISK_COVERAGE": 150 + index * 10,
+                    "LIQUIDITY_COVERAGE_RATIO": 120 + index * 5,
+                    "NET_FUNDING_RATIO": 110 + index * 4,
+                    "JZBJZC": 45 + index * 2,
+                }
+            )
+        rows.append(parse_stock_financial_indicator(row))
+    return rows
+
+
+def model_industry_snapshot(day: date, *, size: int = 12) -> StockIndustryValuationSnapshot:
+    rows = tuple(
+        StockValuationPoint(
+            date=day,
+            code="600000" if index == 1 else f"600{index:03d}",
+            name=f"Stock {index}",
+            close=10.0,
+            market_cap=None,
+            pe_ttm=float(index + 5),
+            pe_static=None,
+            pb=float(index) / 2,
+            ps_ttm=None,
+            pcf_ocf_ttm=None,
+            peg=None,
+            raw={},
+            board_code="016000",
+            board_name="Fixture",
+            original_board_code="1000",
+        )
+        for index in range(1, size + 1)
+    )
+    return StockIndustryValuationSnapshot(
+        date=day,
+        board_code="016000",
+        board_name="Fixture",
+        original_board_code="1000",
+        rows=rows,
+    )
 
 
 def make_valuation(day: date, value: int) -> StockValuationPoint:

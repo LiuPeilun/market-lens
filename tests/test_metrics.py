@@ -227,7 +227,8 @@ def test_financial_factor_diagnostics_cover_all_model_scopes_and_states() -> Non
         )
         assert available["model_scope"] == expected_scope
         assert available["diagnostic"]["status"] == "available"
-        assert available["scoring_eligible"] is False
+        assert available["scoring_eligible"] is True
+        assert available["scoring_reason"] == "factor_level_model_rules_apply"
 
         empty = parse_stock_financial_indicator(
             {

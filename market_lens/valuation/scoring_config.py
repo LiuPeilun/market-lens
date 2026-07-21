@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 SCHEMA_VERSION = "2"
-MODEL_VERSION = "valuation-v2.0.0-infrastructure"
+MODEL_VERSION = "valuation-v2.1.0-stock-models"
 
 DimensionCategory = Literal["valuation", "quality", "product"]
-FactorDirection = Literal["lower_is_better", "higher_is_better"]
+FactorDirection = Literal["higher_value_higher_score", "lower_value_higher_score"]
+StockModelKey = Literal["generic_non_financial", "bank", "insurance", "securities"]
 NormalizationMethod = Literal[
     "historical_percentile",
     "pre_normalized_percentile",
@@ -45,6 +46,17 @@ class FactorDefinition:
                 raise ValueError("anchor_max must be greater than anchor_min")
 
 
+@dataclass(frozen=True)
+class StockModelConfig:
+    key: StockModelKey
+    name: str
+    valuation_factors: tuple[FactorDefinition, ...]
+    quality_factors: tuple[FactorDefinition, ...]
+    minimum_valuation_weight: float = 0.5
+    minimum_quality_weight: float = 0.6
+    warnings: tuple[str, ...] = ()
+
+
 STOCK_VALUATION_FACTORS = (
     FactorDefinition(
         key="pe_ttm",
@@ -52,7 +64,7 @@ STOCK_VALUATION_FACTORS = (
         category="valuation",
         unit="multiple",
         weight=0.40,
-        direction="lower_is_better",
+        direction="higher_value_higher_score",
         normalization="historical_percentile",
         minimum_sample_size=252,
         full_sample_size=1200,
@@ -65,7 +77,7 @@ STOCK_VALUATION_FACTORS = (
         category="valuation",
         unit="multiple",
         weight=0.30,
-        direction="lower_is_better",
+        direction="higher_value_higher_score",
         normalization="historical_percentile",
         minimum_sample_size=252,
         full_sample_size=1200,
@@ -78,7 +90,7 @@ STOCK_VALUATION_FACTORS = (
         category="valuation",
         unit="multiple",
         weight=0.15,
-        direction="lower_is_better",
+        direction="higher_value_higher_score",
         normalization="historical_percentile",
         minimum_sample_size=252,
         full_sample_size=1200,
@@ -90,7 +102,7 @@ STOCK_VALUATION_FACTORS = (
         category="valuation",
         unit="multiple",
         weight=0.15,
-        direction="lower_is_better",
+        direction="higher_value_higher_score",
         normalization="historical_percentile",
         minimum_sample_size=252,
         full_sample_size=1200,
@@ -98,12 +110,233 @@ STOCK_VALUATION_FACTORS = (
     ),
 )
 
+
+def historical_valuation_factor(
+    key: str,
+    name: str,
+    weight: float,
+    *,
+    core: bool = False,
+) -> FactorDefinition:
+    return FactorDefinition(
+        key=key,
+        name=name,
+        category="valuation",
+        unit="multiple",
+        weight=weight,
+        direction="higher_value_higher_score",
+        normalization="historical_percentile",
+        minimum_sample_size=252,
+        full_sample_size=1200,
+        positive_only=True,
+        core=core,
+    )
+
+
+def industry_valuation_factor(key: str, name: str, weight: float) -> FactorDefinition:
+    return FactorDefinition(
+        key=key,
+        name=name,
+        category="valuation",
+        unit="percentile",
+        weight=weight,
+        direction="higher_value_higher_score",
+        normalization="pre_normalized_percentile",
+        minimum_sample_size=10,
+        full_sample_size=30,
+    )
+
+
+def quality_anchor_factor(
+    key: str,
+    name: str,
+    unit: str,
+    weight: float,
+    anchor_min: float,
+    anchor_max: float,
+    *,
+    lower_is_better: bool = False,
+    core: bool = False,
+) -> FactorDefinition:
+    return FactorDefinition(
+        key=key,
+        name=name,
+        category="quality",
+        unit=unit,
+        weight=weight,
+        direction=(
+            "lower_value_higher_score" if lower_is_better else "higher_value_higher_score"
+        ),
+        normalization="linear_anchor",
+        minimum_sample_size=3,
+        full_sample_size=5,
+        core=core,
+        anchor_min=anchor_min,
+        anchor_max=anchor_max,
+    )
+
+
+def stability_factor(weight: float) -> FactorDefinition:
+    return FactorDefinition(
+        key="roe_stability",
+        name="ROE stability",
+        category="quality",
+        unit="score_ratio",
+        weight=weight,
+        direction="higher_value_higher_score",
+        normalization="pre_normalized_percentile",
+        minimum_sample_size=3,
+        full_sample_size=5,
+    )
+
+
+GENERIC_NON_FINANCIAL_MODEL = StockModelConfig(
+    key="generic_non_financial",
+    name="通用非金融",
+    valuation_factors=(
+        historical_valuation_factor("pe_ttm", "PE TTM historical percentile", 0.30, core=True),
+        historical_valuation_factor("pb", "PB historical percentile", 0.25, core=True),
+        historical_valuation_factor("ps_ttm", "PS TTM historical percentile", 0.10),
+        historical_valuation_factor("pcf_ocf_ttm", "PCF historical percentile", 0.10),
+        industry_valuation_factor("industry_pe_ttm", "Industry PE percentile", 0.15),
+        industry_valuation_factor("industry_pb", "Industry PB percentile", 0.10),
+    ),
+    quality_factors=(
+        quality_anchor_factor("roe_weighted", "Weighted ROE", "percent", 0.25, 5, 25, core=True),
+        quality_anchor_factor("roic_pct", "ROIC", "percent", 0.25, 5, 25, core=True),
+        quality_anchor_factor(
+            "parent_netprofit_growth_pct", "Net profit growth", "percent", 0.15, -20, 30
+        ),
+        quality_anchor_factor(
+            "revenue_growth_pct", "Revenue growth", "percent", 0.15, -10, 25
+        ),
+        stability_factor(0.20),
+    ),
+)
+
+BANK_MODEL = StockModelConfig(
+    key="bank",
+    name="银行",
+    valuation_factors=(
+        historical_valuation_factor("pb", "PB historical percentile", 0.40, core=True),
+        historical_valuation_factor("pe_ttm", "PE TTM historical percentile", 0.20),
+        industry_valuation_factor("industry_pb", "Industry PB percentile", 0.25),
+        industry_valuation_factor("industry_pe_ttm", "Industry PE percentile", 0.15),
+    ),
+    quality_factors=(
+        quality_anchor_factor("roe_weighted", "Weighted ROE", "percent", 0.25, 5, 18, core=True),
+        quality_anchor_factor(
+            "net_interest_margin_pct", "Net interest margin", "percent", 0.20, 1, 3, core=True
+        ),
+        quality_anchor_factor(
+            "non_performing_loan_ratio_pct",
+            "Non-performing loan ratio",
+            "percent",
+            0.20,
+            0.5,
+            2.5,
+            lower_is_better=True,
+            core=True,
+        ),
+        quality_anchor_factor(
+            "provision_coverage_ratio_pct", "Provision coverage", "percent", 0.15, 100, 400
+        ),
+        quality_anchor_factor(
+            "capital_adequacy_ratio_pct", "Capital adequacy", "percent", 0.10, 10.5, 20
+        ),
+        stability_factor(0.10),
+    ),
+)
+
+INSURANCE_MODEL = StockModelConfig(
+    key="insurance",
+    name="保险",
+    valuation_factors=(
+        historical_valuation_factor("pb", "PB historical percentile", 0.65, core=True),
+        historical_valuation_factor("pe_ttm", "PE TTM historical percentile", 0.35),
+    ),
+    quality_factors=(
+        quality_anchor_factor("roe_weighted", "Weighted ROE", "percent", 0.25, 5, 20, core=True),
+        quality_anchor_factor(
+            "solvency_adequacy_ratio_pct",
+            "Solvency adequacy",
+            "percent",
+            0.25,
+            100,
+            250,
+            core=True,
+        ),
+        quality_anchor_factor(
+            "new_business_value_growth_pct", "New business value growth", "percent", 0.15, -20, 30
+        ),
+        quality_anchor_factor(
+            "new_business_value_margin_pct", "New business value margin", "percent", 0.15, 10, 50
+        ),
+        quality_anchor_factor(
+            "parent_netprofit_growth_pct", "Net profit growth", "percent", 0.10, -20, 30
+        ),
+        stability_factor(0.10),
+    ),
+    warnings=("insurance_pev_unavailable",),
+)
+
+SECURITIES_MODEL = StockModelConfig(
+    key="securities",
+    name="证券",
+    valuation_factors=(
+        historical_valuation_factor("pb", "PB historical percentile", 0.45, core=True),
+        historical_valuation_factor("pe_ttm", "PE TTM historical percentile", 0.25),
+        industry_valuation_factor("industry_pb", "Industry PB percentile", 0.20),
+        industry_valuation_factor("industry_pe_ttm", "Industry PE percentile", 0.10),
+    ),
+    quality_factors=(
+        quality_anchor_factor("roe_weighted", "Weighted ROE", "percent", 0.20, 3, 15, core=True),
+        quality_anchor_factor(
+            "risk_coverage_ratio_pct", "Risk coverage", "percent", 0.20, 100, 300, core=True
+        ),
+        quality_anchor_factor(
+            "liquidity_coverage_ratio_pct",
+            "Liquidity coverage",
+            "percent",
+            0.15,
+            100,
+            250,
+            core=True,
+        ),
+        quality_anchor_factor(
+            "net_stable_funding_ratio_pct", "Net stable funding", "percent", 0.15, 100, 180
+        ),
+        quality_anchor_factor(
+            "net_capital_to_net_assets_pct",
+            "Net capital to net assets",
+            "percent",
+            0.15,
+            20,
+            80,
+        ),
+        quality_anchor_factor(
+            "parent_netprofit_growth_pct", "Net profit growth", "percent", 0.05, -30, 40
+        ),
+        stability_factor(0.10),
+    ),
+)
+
+STOCK_MODEL_CONFIGS: dict[StockModelKey, StockModelConfig] = {
+    model.key: model
+    for model in (
+        GENERIC_NON_FINANCIAL_MODEL,
+        BANK_MODEL,
+        INSURANCE_MODEL,
+        SECURITIES_MODEL,
+    )
+}
+
 FUND_VALUATION_FACTOR_DIRECTIONS: dict[str, FactorDirection] = {
-    "pe_historical_percentile": "lower_is_better",
-    "pb_historical_percentile": "lower_is_better",
-    "peer_pe_percentile": "lower_is_better",
-    "dividend_yield": "higher_is_better",
-    "index_price_percentile": "lower_is_better",
+    "pe_historical_percentile": "higher_value_higher_score",
+    "pb_historical_percentile": "higher_value_higher_score",
+    "peer_pe_percentile": "higher_value_higher_score",
+    "dividend_yield": "lower_value_higher_score",
+    "index_price_percentile": "higher_value_higher_score",
 }
 
 LEGACY_FUND_FACTOR_WEIGHTS: dict[str, dict[str, float]] = {

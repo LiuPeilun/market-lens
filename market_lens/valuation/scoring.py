@@ -78,6 +78,15 @@ def evaluate_factor(
     if eligible and definition.positive_only and value is not None and value <= 0:
         eligible = False
         warnings.append("non_positive_value")
+    if (
+        eligible
+        and definition.normalization != "historical_percentile"
+        and sample_size < definition.minimum_sample_size
+    ):
+        eligible = False
+        warnings.append(
+            f"insufficient_sample:{sample_size}<{definition.minimum_sample_size}"
+        )
 
     normalized_value: float | None = None
     if eligible and definition.normalization == "historical_percentile":
@@ -108,7 +117,7 @@ def evaluate_factor(
 
     if eligible and normalized_value is not None:
         score = normalized_value * 100
-        if definition.direction == "higher_is_better":
+        if definition.direction == "lower_value_higher_score":
             score = 100 - score
 
     return FactorResult(

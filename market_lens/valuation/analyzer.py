@@ -146,7 +146,8 @@ def analyze_stock(
             "Stock valuation history may not cover a full 10 years for every symbol.",
             "Composite valuation score is based on available historical valuation percentiles.",
             "Stock fundamentals and peer comparison are sourced from Eastmoney F10 when available.",
-            "Industry valuation percentiles are context only and do not affect the current score.",
+            "Industry valuation percentiles enter supported stock models when sample gates pass.",
+            "Fundamental quality is scored separately and does not alter the valuation level.",
             "This is a research summary, not investment advice.",
         ],
         "latest_raw": asdict(latest_valuation) if latest_valuation else None,
@@ -157,6 +158,8 @@ def analyze_stock(
         retrieved_at=retrieved_at,
         factor_data=factor_data,
         industry_valuation=industry_valuation_summary,
+        financials=financials,
+        stock_profile=profile,
     )
     return result
 
@@ -419,6 +422,10 @@ def summarize_financial_factor_data(
         error=error,
         extra_reasons=extra_reasons,
     )
+    scoring_eligible = scope in FINANCIAL_SCOPE_FIELDS and diagnostic["status"] in {
+        "available",
+        "partial",
+    }
     return {
         "model_scope": scope,
         "org_type": latest.org_type if latest else None,
@@ -446,8 +453,12 @@ def summarize_financial_factor_data(
             }
             for item in usable_rows
         ],
-        "scoring_eligible": False,
-        "scoring_reason": "read_only_pending_model_validation",
+        "scoring_eligible": scoring_eligible,
+        "scoring_reason": (
+            "factor_level_model_rules_apply"
+            if scoring_eligible
+            else f"source_status_{diagnostic['status']}"
+        ),
         "fcff_semantics": (
             "Eastmoney annual FCFF_BACK and FCFF_FORWARD source fields; "
             "not treated as TTM and not converted to free-cash-flow yield."
