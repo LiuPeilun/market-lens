@@ -17,6 +17,7 @@ from market_lens.types import (
     StockValuationPoint,
 )
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
+from market_lens.valuation.assessment import build_fund_assessment
 from market_lens.valuation.framework import analyze_index_price_proxy
 
 
@@ -192,6 +193,10 @@ class MarketAnalysisAgent:
                     0,
                     "ETF valuation currently uses tracked-index price percentile as a proxy.",
                 )
+            result["assessment"] = build_fund_assessment(
+                result,
+                retrieved_at=retrieved_at,
+            )
             return result
         raise ValueError("asset_type must be 'stock' or 'fund'")
 

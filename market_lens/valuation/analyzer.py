@@ -18,6 +18,7 @@ from market_lens.types import (
     StockProfile,
     StockValuationPoint,
 )
+from market_lens.valuation.assessment import build_fund_assessment, build_stock_assessment
 from market_lens.valuation.framework import analyze_fund_valuation, analyze_stock_valuation
 from market_lens.valuation.metrics import (
     annualized_return,
@@ -110,7 +111,7 @@ def analyze_stock(
         "security_type": profile.security_type if profile else None,
     }
 
-    return {
+    result = {
         "asset_type": "stock",
         "code": symbol,
         "name": name or latest_valuation.name if latest_valuation else name,
@@ -150,6 +151,14 @@ def analyze_stock(
         ],
         "latest_raw": asdict(latest_valuation) if latest_valuation else None,
     }
+    result["assessment"] = build_stock_assessment(
+        valuations,
+        analysis_as_of=latest_bar.date if latest_bar else None,
+        retrieved_at=retrieved_at,
+        factor_data=factor_data,
+        industry_valuation=industry_valuation_summary,
+    )
+    return result
 
 
 def summarize_peer_comparison(
@@ -556,7 +565,7 @@ def analyze_fund(
         error=product_info_error,
     )
 
-    return {
+    result = {
         "asset_type": "fund",
         "code": code,
         "name": name,
@@ -584,6 +593,8 @@ def analyze_fund(
             "This is a research summary, not investment advice.",
         ],
     }
+    result["assessment"] = build_fund_assessment(result, retrieved_at=retrieved_at)
+    return result
 
 
 def summarize_fund_product_data(
