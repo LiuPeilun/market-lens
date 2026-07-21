@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from urllib.parse import unquote
 
 from market_lens.data.eastmoney import (
     EastmoneyClient,
@@ -26,6 +27,7 @@ from market_lens.data.eastmoney import (
     parse_stock_kline,
     parse_stock_peer_comparison,
     parse_stock_profile,
+    parse_stock_valuation_row,
     rank_search_results,
     repair_mojibake,
 )
@@ -67,6 +69,95 @@ def test_parse_stock_profile() -> None:
     assert row.code == "600519"
     assert row.em_industry == "Food-Beverage"
     assert row.csrc_industry == "Manufacturing"
+
+
+def test_parse_stock_valuation_row_includes_industry_board() -> None:
+    row = parse_stock_valuation_row(
+        {
+            "TRADE_DATE": "2026-07-20 00:00:00",
+            "SECURITY_CODE": "600519",
+            "SECURITY_NAME_ABBR": "贵州茅台",
+            "PE_TTM": 20.06,
+            "PB_MRQ": 6.13,
+            "BOARD_CODE": "016165",
+            "BOARD_NAME": "白酒Ⅱ",
+            "ORIG_BOARD_CODE": "1277",
+        }
+    )
+
+    assert row.board_code == "016165"
+    assert row.board_name == "白酒Ⅱ"
+    assert row.original_board_code == "1277"
+
+
+def test_get_stock_industry_valuation_snapshot_paginates(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    requested_urls: list[str] = []
+
+    def raw_row(code: str, pe: float, pb: float) -> dict[str, object]:
+        return {
+            "TRADE_DATE": "2026-07-20 00:00:00",
+            "SECURITY_CODE": code,
+            "SECURITY_NAME_ABBR": code,
+            "PE_TTM": pe,
+            "PB_MRQ": pb,
+            "BOARD_CODE": "016165",
+            "BOARD_NAME": "白酒Ⅱ",
+            "ORIG_BOARD_CODE": "1277",
+        }
+
+    def fake_get_json(url: str, ttl_seconds: int) -> dict[str, object]:
+        requested_urls.append(unquote(url))
+        page = 2 if "pageNumber=2" in url else 1
+        return {
+            "success": True,
+            "result": {
+                "pages": 2,
+                "data": [raw_row("600519" if page == 1 else "000858", 20 + page, 6 + page)],
+            },
+        }
+
+    monkeypatch.setattr(client, "_get_json", fake_get_json)
+    snapshot = client.get_stock_industry_valuation_snapshot(
+        "016165",
+        date(2026, 7, 20),
+        board_name="白酒Ⅱ",
+        page_size=1,
+    )
+
+    assert [row.code for row in snapshot.rows] == ["000858", "600519"]
+    assert snapshot.original_board_code == "1277"
+    assert len(requested_urls) == 2
+    assert all('(BOARD_CODE="016165")' in url for url in requested_urls)
+    assert all("(TRADE_DATE='2026-07-20')" in url for url in requested_urls)
+
+
+def test_get_stock_industry_valuation_snapshot_rejects_mismatched_rows(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    monkeypatch.setattr(
+        client,
+        "_get_json",
+        lambda url, ttl_seconds: {
+            "success": True,
+            "result": {
+                "pages": 1,
+                "data": [
+                    {
+                        "TRADE_DATE": "2026-07-20 00:00:00",
+                        "SECURITY_CODE": "600519",
+                        "BOARD_CODE": "wrong-board",
+                    }
+                ],
+            },
+        },
+    )
+
+    try:
+        client.get_stock_industry_valuation_snapshot("016165", date(2026, 7, 20))
+    except EastmoneyError as exc:
+        assert "did not match" in str(exc)
+    else:
+        raise AssertionError("mismatched industry rows must fail closed")
 
 
 def test_parse_stock_financial_indicator() -> None:

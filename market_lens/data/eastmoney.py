@@ -26,6 +26,7 @@ from market_lens.types import (
     StockDividendPlan,
     StockDividendSummary,
     StockFinancialIndicator,
+    StockIndustryValuationSnapshot,
     StockPeerComparison,
     StockProfile,
     StockValuationPoint,
@@ -135,6 +136,99 @@ class EastmoneyClient:
         rows = result.get("data") or []
         points = [parse_stock_valuation_row(row) for row in rows]
         return sorted(points, key=lambda item: item.date)
+
+    def get_stock_industry_valuation_snapshot(
+        self,
+        board_code: str,
+        trade_date: date,
+        board_name: str | None = None,
+        page_size: int = 500,
+    ) -> StockIndustryValuationSnapshot:
+        normalized_board_code = str(board_code).strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]+", normalized_board_code):
+            raise ValueError(f"Invalid industry board code: {board_code!r}")
+        if not 1 <= page_size <= 500:
+            raise ValueError("page_size must be between 1 and 500")
+
+        first_payload = self._get_stock_industry_valuation_page(
+            normalized_board_code,
+            trade_date,
+            page=1,
+            page_size=page_size,
+        )
+        result = first_payload.get("result") or {}
+        raw_rows = list(result.get("data") or [])
+        pages = int(result.get("pages") or 1)
+        if pages > 20:
+            raise EastmoneyError(
+                f"Unexpected industry valuation pagination for {normalized_board_code}: {pages}"
+            )
+        for page in range(2, pages + 1):
+            payload = self._get_stock_industry_valuation_page(
+                normalized_board_code,
+                trade_date,
+                page=page,
+                page_size=page_size,
+            )
+            raw_rows.extend((payload.get("result") or {}).get("data") or [])
+
+        rows = [parse_stock_valuation_row(row) for row in raw_rows]
+        mismatched_rows = [
+            row
+            for row in rows
+            if row.board_code != normalized_board_code or row.date != trade_date
+        ]
+        if mismatched_rows:
+            raise EastmoneyError(
+                "Industry valuation response did not match the requested board and trade date"
+            )
+
+        unique_rows = {row.code: row for row in rows if row.code}
+        sorted_rows = tuple(unique_rows[code] for code in sorted(unique_rows))
+        first_row = sorted_rows[0] if sorted_rows else None
+        resolved_board_name = board_name or (first_row.board_name if first_row else None)
+        original_board_code = first_row.original_board_code if first_row else None
+        return StockIndustryValuationSnapshot(
+            date=trade_date,
+            board_code=normalized_board_code,
+            board_name=resolved_board_name,
+            original_board_code=original_board_code,
+            rows=sorted_rows,
+        )
+
+    def _get_stock_industry_valuation_page(
+        self,
+        board_code: str,
+        trade_date: date,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        filter_value = quote(
+            f'(BOARD_CODE="{board_code}")(TRADE_DATE=\'{trade_date.isoformat()}\')',
+            safe="()='",
+        )
+        params = {
+            "sortColumns": "SECURITY_CODE",
+            "sortTypes": "1",
+            "pageSize": str(page_size),
+            "pageNumber": str(page),
+            "reportName": "RPT_VALUEANALYSIS_DET",
+            "columns": "ALL",
+            "quoteColumns": "",
+            "source": "WEB",
+            "client": "WEB",
+        }
+        url = (
+            "https://datacenter-web.eastmoney.com/api/data/v1/get?"
+            + urlencode(params)
+            + f"&filter={filter_value}"
+        )
+        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+        if payload.get("success") is not True or not isinstance(payload.get("result"), dict):
+            raise EastmoneyError(
+                f"Unexpected industry valuation response for {board_code} on {trade_date}"
+            )
+        return payload
 
     def get_stock_profile(self, symbol: str) -> StockProfile | None:
         code = f10_stock_code(symbol)
@@ -819,6 +913,9 @@ def parse_stock_valuation_row(row: dict[str, Any]) -> StockValuationPoint:
         pcf_ocf_ttm=to_float(row.get("PCF_OCF_TTM")),
         peg=to_float(row.get("PEG_CAR")),
         raw=row,
+        board_code=str(row.get("BOARD_CODE") or "").strip() or None,
+        board_name=repair_mojibake(row.get("BOARD_NAME")),
+        original_board_code=str(row.get("ORIG_BOARD_CODE") or "").strip() or None,
     )
 
 

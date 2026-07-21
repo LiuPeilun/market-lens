@@ -48,6 +48,19 @@ class StockValuationPoint:
     pcf_ocf_ttm: float | None
     peg: float | None
     raw: dict[str, Any]
+    board_code: str | None = None
+    board_name: str | None = None
+    original_board_code: str | None = None
+
+
+@dataclass(frozen=True)
+class StockIndustryValuationSnapshot:
+    date: date
+    board_code: str
+    board_name: str | None
+    original_board_code: str | None
+    rows: tuple[StockValuationPoint, ...]
+    source: str = "eastmoney_datacenter"
 
 
 @dataclass(frozen=True)

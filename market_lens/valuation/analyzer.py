@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import timedelta
+from math import isfinite
 from typing import Any
 
 from market_lens.types import (
@@ -11,6 +12,7 @@ from market_lens.types import (
     StockDividendPlan,
     StockDividendSummary,
     StockFinancialIndicator,
+    StockIndustryValuationSnapshot,
     StockPeerComparison,
     StockProfile,
     StockValuationPoint,
@@ -35,6 +37,8 @@ def analyze_stock(
     financials: list[StockFinancialIndicator] | None = None,
     peers: dict[str, list[StockPeerComparison]] | None = None,
     dividends: dict[str, list[StockDividendPlan] | list[StockDividendSummary]] | None = None,
+    industry_valuation: StockIndustryValuationSnapshot | None = None,
+    industry_valuation_error: str | None = None,
 ) -> dict[str, Any]:
     latest_bar = bars[-1] if bars else None
     latest_valuation = valuations[-1] if valuations else None
@@ -61,6 +65,11 @@ def analyze_stock(
 
     valuation_framework = analyze_stock_valuation(valuations)
     peer_summary = summarize_peer_comparison(symbol, peers)
+    industry_valuation_summary = summarize_industry_valuation(
+        symbol,
+        industry_valuation,
+        error=industry_valuation_error,
+    )
     dividend_summary = summarize_dividends(
         plans=[item for item in dividends.get("plans", []) if isinstance(item, StockDividendPlan)],
         summaries=[
@@ -108,6 +117,7 @@ def analyze_stock(
             "industry": industry_summary,
             "fundamentals": fundamental_summary,
             "peer_comparison": peer_summary,
+            "industry_valuation": industry_valuation_summary,
             "dividend": dividend_summary,
             **valuation_framework,
         },
@@ -124,6 +134,7 @@ def analyze_stock(
             "Stock valuation history may not cover a full 10 years for every symbol.",
             "Composite valuation score is based on available historical valuation percentiles.",
             "Stock fundamentals and peer comparison are sourced from Eastmoney F10 when available.",
+            "Industry valuation percentiles are context only and do not affect the current score.",
             "This is a research summary, not investment advice.",
         ],
         "latest_raw": asdict(latest_valuation) if latest_valuation else None,
@@ -159,6 +170,96 @@ def summarize_peer_comparison(
                 "roe_avg": "roe_avg",
             },
         ),
+    }
+
+
+def summarize_industry_valuation(
+    symbol: str,
+    snapshot: StockIndustryValuationSnapshot | None,
+    error: str | None = None,
+    minimum_sample_size: int = 10,
+) -> dict[str, Any]:
+    if snapshot is None:
+        return {
+            "status": "error" if error else "unavailable",
+            "source": "eastmoney_datacenter",
+            "as_of": None,
+            "board_code": None,
+            "board_name": None,
+            "industry_level": "eastmoney_valuation_board",
+            "parent_fallback_available": False,
+            "sample_size": 0,
+            "target_present": False,
+            "metrics": {},
+            "reason": error or "industry_snapshot_unavailable",
+        }
+
+    target = next((row for row in snapshot.rows if row.code == symbol), None)
+    status = "available" if snapshot.rows else "empty"
+    return {
+        "status": status,
+        "source": snapshot.source,
+        "as_of": snapshot.date.isoformat(),
+        "board_code": snapshot.board_code,
+        "board_name": snapshot.board_name,
+        "original_board_code": snapshot.original_board_code,
+        "industry_level": "eastmoney_valuation_board",
+        "parent_fallback_available": False,
+        "sample_size": len(snapshot.rows),
+        "target_present": target is not None,
+        "minimum_sample_size": minimum_sample_size,
+        "metrics": {
+            "pe_ttm": summarize_industry_metric(
+                snapshot.rows,
+                target,
+                "pe_ttm",
+                minimum_sample_size,
+            ),
+            "pb": summarize_industry_metric(
+                snapshot.rows,
+                target,
+                "pb",
+                minimum_sample_size,
+            ),
+        },
+        "reason": None if snapshot.rows else "industry_snapshot_empty",
+    }
+
+
+def summarize_industry_metric(
+    rows: tuple[StockValuationPoint, ...],
+    target: StockValuationPoint | None,
+    attribute: str,
+    minimum_sample_size: int,
+) -> dict[str, Any]:
+    values = [
+        float(value)
+        for row in rows
+        if isinstance((value := getattr(row, attribute, None)), int | float)
+        and isfinite(value)
+        and value > 0
+    ]
+    target_value = getattr(target, attribute, None) if target else None
+    target_is_valid = (
+        isinstance(target_value, int | float) and isfinite(target_value) and target_value > 0
+    )
+    eligible = target_is_valid and len(values) >= minimum_sample_size
+    reason = None
+    if target is None:
+        reason = "target_not_in_industry_snapshot"
+    elif not target_is_valid:
+        reason = "target_value_missing_or_non_positive"
+    elif len(values) < minimum_sample_size:
+        reason = "insufficient_industry_sample"
+
+    percentile = percentile_rank(values, float(target_value)) if eligible else None
+    return {
+        "value": float(target_value) if target_is_valid else target_value,
+        "percentile": percentile,
+        "eligible": eligible,
+        "valid_sample_size": len(values),
+        "excluded_sample_size": len(rows) - len(values),
+        "reason": reason,
     }
 
 

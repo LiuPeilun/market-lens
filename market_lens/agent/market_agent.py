@@ -10,7 +10,12 @@ from market_lens.data.eastmoney import (
     is_a_share_symbol,
     stock_bars_from_valuations,
 )
-from market_lens.types import FundHolding, FundHoldingsRoute
+from market_lens.types import (
+    FundHolding,
+    FundHoldingsRoute,
+    StockIndustryValuationSnapshot,
+    StockValuationPoint,
+)
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.framework import analyze_index_price_proxy
 
@@ -61,6 +66,9 @@ class MarketAnalysisAgent:
                 dividends = self.data_client.get_stock_dividends(code)
             except EastmoneyError:
                 pass
+            industry_valuation, industry_valuation_error = self._load_industry_valuation(
+                valuations
+            )
             return analyze_stock(
                 code,
                 bars,
@@ -70,6 +78,8 @@ class MarketAnalysisAgent:
                 financials=financials,
                 peers=peers,
                 dividends=dividends,
+                industry_valuation=industry_valuation,
+                industry_valuation_error=industry_valuation_error,
             )
         if asset_type == "fund":
             try:
@@ -238,6 +248,25 @@ class MarketAnalysisAgent:
             peers=peers,
             dividends=dividends,
         )
+
+    def _load_industry_valuation(
+        self,
+        valuations: list[StockValuationPoint],
+    ) -> tuple[StockIndustryValuationSnapshot | None, str | None]:
+        latest = valuations[-1] if valuations else None
+        if latest is None:
+            return None, "valuation_history_unavailable"
+        if not latest.board_code:
+            return None, "industry_board_code_unavailable"
+        try:
+            snapshot = self.data_client.get_stock_industry_valuation_snapshot(
+                latest.board_code,
+                latest.date,
+                board_name=latest.board_name,
+            )
+        except (EastmoneyError, ValueError) as exc:
+            return None, str(exc)
+        return snapshot, None
 
 
 def is_supported_holding_stock(code: str) -> bool:

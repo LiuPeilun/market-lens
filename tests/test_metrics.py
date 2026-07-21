@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 
-from market_lens.types import FundHolding, FundNavPoint, StockBar, StockValuationPoint
+from market_lens.types import (
+    FundHolding,
+    FundNavPoint,
+    StockBar,
+    StockIndustryValuationSnapshot,
+    StockValuationPoint,
+)
+from market_lens.valuation.analyzer import summarize_industry_valuation
 from market_lens.valuation.framework import (
     analyze_fund_valuation,
     analyze_index_price_proxy,
@@ -78,6 +85,91 @@ def test_analyze_stock_valuation_framework() -> None:
     assert result["level_zh"] == "极度高估"
     assert result["confidence"] > 0
     assert len(result["factors"]) == 4
+
+
+def test_summarize_industry_valuation_filters_invalid_multiples() -> None:
+    rows = tuple(
+        StockValuationPoint(
+            date=date(2026, 7, 20),
+            code=f"600{index:03d}",
+            name=f"股票{index}",
+            close=10.0,
+            market_cap=None,
+            pe_ttm=float(index) if index <= 10 else -float(index),
+            pe_static=None,
+            pb=float(index),
+            ps_ttm=None,
+            pcf_ocf_ttm=None,
+            peg=None,
+            raw={},
+            board_code="016165",
+            board_name="白酒Ⅱ",
+            original_board_code="1277",
+        )
+        for index in range(1, 13)
+    )
+    snapshot = StockIndustryValuationSnapshot(
+        date=date(2026, 7, 20),
+        board_code="016165",
+        board_name="白酒Ⅱ",
+        original_board_code="1277",
+        rows=rows,
+    )
+
+    result = summarize_industry_valuation("600005", snapshot)
+
+    assert result["status"] == "available"
+    assert result["industry_level"] == "eastmoney_valuation_board"
+    assert result["parent_fallback_available"] is False
+    assert result["metrics"]["pe_ttm"]["eligible"] is True
+    assert result["metrics"]["pe_ttm"]["valid_sample_size"] == 10
+    assert result["metrics"]["pe_ttm"]["excluded_sample_size"] == 2
+    assert result["metrics"]["pe_ttm"]["percentile"] == 0.5
+
+    negative_target = summarize_industry_valuation("600011", snapshot)
+    assert negative_target["metrics"]["pe_ttm"]["eligible"] is False
+    assert negative_target["metrics"]["pe_ttm"]["percentile"] is None
+    assert (
+        negative_target["metrics"]["pe_ttm"]["reason"]
+        == "target_value_missing_or_non_positive"
+    )
+
+
+def test_summarize_industry_valuation_marks_small_sample_ineligible() -> None:
+    rows = tuple(
+        StockValuationPoint(
+            date=date(2026, 7, 20),
+            code=f"60131{index}",
+            name=f"保险{index}",
+            close=10.0,
+            market_cap=None,
+            pe_ttm=float(index + 1),
+            pe_static=None,
+            pb=float(index + 1),
+            ps_ttm=None,
+            pcf_ocf_ttm=None,
+            peg=None,
+            raw={},
+            board_code="016028",
+            board_name="保险Ⅱ",
+            original_board_code="474",
+        )
+        for index in range(5)
+    )
+    snapshot = StockIndustryValuationSnapshot(
+        date=date(2026, 7, 20),
+        board_code="016028",
+        board_name="保险Ⅱ",
+        original_board_code="474",
+        rows=rows,
+    )
+
+    result = summarize_industry_valuation("601310", snapshot)
+
+    assert result["sample_size"] == 5
+    assert result["metrics"]["pe_ttm"]["percentile"] is None
+    assert result["metrics"]["pe_ttm"]["eligible"] is False
+    assert result["metrics"]["pe_ttm"]["reason"] == "insufficient_industry_sample"
 
 
 def test_analyze_fund_valuation_framework_marks_pending_inputs() -> None:

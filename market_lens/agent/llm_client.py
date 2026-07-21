@@ -188,6 +188,7 @@ def compact_analysis_for_llm(analysis: dict[str, Any]) -> dict[str, Any]:
             "industry": valuation.get("industry"),
             "fundamentals": valuation.get("fundamentals"),
             "peer_comparison": valuation.get("peer_comparison"),
+            "industry_valuation": valuation.get("industry_valuation"),
             "dividend": valuation.get("dividend"),
             "index": valuation.get("index"),
             "portfolio": valuation.get("portfolio"),
