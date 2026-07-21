@@ -7,7 +7,11 @@ import pytest
 
 from market_lens.data.eastmoney import parse_stock_financial_indicator
 from market_lens.types import (
+    FundHolding,
+    FundHoldingsRoute,
     FundNavPoint,
+    FundProductInfo,
+    FundTrackingInfo,
     StockBar,
     StockIndustryValuationSnapshot,
     StockProfile,
@@ -18,6 +22,10 @@ from market_lens.valuation.assessment import build_fund_assessment
 from market_lens.valuation.confidence import (
     calculate_confidence,
     conservative_overall_confidence,
+)
+from market_lens.valuation.fund_product import (
+    calculate_tracking_metrics,
+    classify_fund_product,
 )
 from market_lens.valuation.scoring import (
     FactorObservation,
@@ -198,7 +206,7 @@ def test_scoring_is_reproducible_for_same_version_and_input() -> None:
     first = score_dimension(definitions, observations)
     second = score_dimension(definitions, observations)
 
-    assert MODEL_VERSION == "valuation-v2.1.0-stock-models"
+    assert MODEL_VERSION == "valuation-v2.2.0-fund-product-models"
     assert first == second
 
 
@@ -272,8 +280,8 @@ def test_fund_analysis_exposes_pending_assessment_with_model_weights() -> None:
     valuation = assessment["dimensions"]["valuation"]
     assert valuation["score"] is None
     assert valuation["confidence"] == 0.0
-    assert assessment["dimensions"]["quality"] is None
-    assert assessment["dimensions"]["product"] is None
+    assert assessment["dimensions"]["quality"]["score"] is None
+    assert assessment["dimensions"]["product"]["score"] is None
     assert assessment["overall_confidence"] == 0.0
     assert sum(factor["weight"] for factor in valuation["factors"]) == 1.0
     assert all(factor["status"] == "missing" for factor in valuation["factors"])
@@ -318,6 +326,242 @@ def test_index_proxy_assessment_standardizes_factors_and_applies_cap() -> None:
     assert dimension["factors"][0]["source"] == "tracked_index_price_history"
     assert assessment["confidence_detail"]["score"] <= 0.6
     assert assessment["attractiveness"] is None
+
+
+@pytest.mark.parametrize(
+    ("name", "index_code", "target_etf_code", "expected_profile"),
+    [
+        ("沪深300ETF", "000300", None, "etf"),
+        ("沪深300ETF联接A", "000300", "510300", "etf_linked"),
+        ("沪深300指数增强", "000300", None, "index_fund"),
+        ("主动成长混合", None, None, "active_fund"),
+    ],
+)
+def test_fund_product_routing_distinguishes_product_types(
+    name: str,
+    index_code: str | None,
+    target_etf_code: str | None,
+    expected_profile: str,
+) -> None:
+    tracking = FundTrackingInfo(
+        fund_code="000001",
+        fund_name=name,
+        fund_type="指数型-股票" if index_code else "混合型-灵活",
+        index_code=index_code,
+        index_name="沪深300指数" if index_code else None,
+        target_etf_code=target_etf_code,
+        target_etf_name="沪深300ETF" if target_etf_code else None,
+    )
+    route = FundHoldingsRoute(
+        holdings=[],
+        source="unavailable",
+        scope="unavailable",
+        as_of=None,
+        coverage=0.0,
+        tracking=tracking,
+    )
+
+    routing = classify_fund_product("000001", name, None, route)
+
+    assert routing["profile"] == expected_profile
+
+
+def test_tracking_metrics_align_returns_and_apply_benchmark_exposure() -> None:
+    nav_points, benchmark_bars = tracking_fixture(size=253, exposure=0.95)
+
+    metrics = calculate_tracking_metrics(
+        nav_points,
+        benchmark_bars,
+        profile="etf_linked",
+        benchmark="沪深300指数增长率*95%+银行活期存款税后利率*5%",
+    )
+
+    assert metrics["status"] == "available"
+    assert metrics["sample_size"] == 252
+    assert metrics["benchmark_exposure"] == 0.95
+    assert metrics["tracking_error_annualized"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["tracking_deviation_annualized"] == pytest.approx(0.0, abs=1e-12)
+    assert "cash_benchmark_component_assumed_zero_return" in metrics["warnings"]
+
+
+def test_tracking_metrics_use_official_daily_growth_not_cumulative_nav_ratio() -> None:
+    days = [date(2026, 1, day) for day in range(1, 4)]
+    nav_points = [
+        FundNavPoint(days[0], 1.0, 3.0, None, None, None),
+        FundNavPoint(days[1], 1.1, 3.02, 10.0, None, None),
+        FundNavPoint(days[2], 1.21, 3.04, 10.0, None, None),
+    ]
+    benchmark_bars = [
+        make_bar(days[0], 100.0),
+        make_bar(days[1], 110.0),
+        make_bar(days[2], 121.0),
+    ]
+
+    metrics = calculate_tracking_metrics(
+        nav_points,
+        benchmark_bars,
+        profile="etf",
+        benchmark="Test Index",
+    )
+
+    assert metrics["sample_size"] == 2
+    assert metrics["tracking_error_annualized"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["tracking_deviation_annualized"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_etf_assessment_scores_product_and_underlying_quality_separately() -> None:
+    nav_points, benchmark_bars = tracking_fixture(size=253, exposure=1.0)
+    report_date = nav_points[-1].date - timedelta(days=30)
+    holding = FundHolding(
+        rank=1,
+        code="600000",
+        name="Holding",
+        weight_pct=10.0,
+        shares_10k=None,
+        market_value_10k=None,
+        report_date=report_date,
+    )
+    tracking = FundTrackingInfo(
+        fund_code="510300",
+        fund_name="沪深300ETF",
+        fund_type="指数型-股票",
+        index_code="000300",
+        index_name="沪深300指数",
+        target_etf_code=None,
+        target_etf_name=None,
+    )
+    route = FundHoldingsRoute(
+        holdings=[holding],
+        source="csindex_official",
+        scope="tracked_index_top10",
+        as_of=report_date,
+        coverage=0.1,
+        tracking=tracking,
+    )
+    product = FundProductInfo(
+        fund_code="510300",
+        fund_name="沪深300ETF",
+        fund_type="指数型-股票",
+        establishment_date=date(2012, 5, 4),
+        scale_report_date=report_date,
+        period_end_net_assets_cny=10_000_000_000,
+        management_fee_pct=0.15,
+        custody_fee_pct=0.05,
+        sales_service_fee_pct=None,
+        benchmark="沪深300指数",
+        raw={},
+    )
+    result = analyze_fund(
+        "510300",
+        nav_points,
+        name="沪深300ETF",
+        holdings=[holding],
+        holding_analyses={
+            "600000": {
+                "assessment": {"dimensions": {"quality": {"score": 80.0}}}
+            }
+        },
+        product_info=product,
+        holdings_route=route,
+        benchmark_bars=benchmark_bars,
+        data_source="fund_nav_history",
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    assessment = result["assessment"]
+    assert assessment["profile"] == "etf"
+    assert assessment["dimensions"]["product"]["score"] is not None
+    assert assessment["dimensions"]["product"]["confidence"] <= 0.8
+    assert assessment["dimensions"]["quality"]["score"] == 80.0
+    assert assessment["dimensions"]["valuation"]["score"] is None
+    assert assessment["dimensions"]["product"]["model"] == "etf_product_v1"
+    assert assessment["attractiveness"] is None
+
+
+def test_active_fund_product_scores_without_tracking_factors() -> None:
+    nav_points, _ = tracking_fixture(size=30, exposure=1.0)
+    report_date = nav_points[-1].date
+    product = FundProductInfo(
+        fund_code="000001",
+        fund_name="主动成长混合",
+        fund_type="混合型-灵活",
+        establishment_date=date(2001, 1, 1),
+        scale_report_date=report_date,
+        period_end_net_assets_cny=3_000_000_000,
+        management_fee_pct=1.2,
+        custody_fee_pct=0.2,
+        sales_service_fee_pct=None,
+        benchmark="--",
+        raw={},
+    )
+
+    result = analyze_fund(
+        "000001",
+        nav_points,
+        name=product.fund_name,
+        product_info=product,
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    assessment = result["assessment"]
+    product_dimension = assessment["dimensions"]["product"]
+    assert assessment["profile"] == "active_fund"
+    assert product_dimension["score"] is not None
+    assert {factor["key"] for factor in product_dimension["factors"]} == {
+        "total_annual_fee_pct",
+        "period_end_net_assets_cny",
+    }
+
+
+def test_index_product_does_not_score_with_insufficient_tracking_sample() -> None:
+    nav_points, benchmark_bars = tracking_fixture(size=60, exposure=1.0)
+    report_date = nav_points[-1].date
+    tracking = FundTrackingInfo(
+        fund_code="510300",
+        fund_name="沪深300ETF",
+        fund_type="指数型-股票",
+        index_code="000300",
+        index_name="沪深300指数",
+        target_etf_code=None,
+        target_etf_name=None,
+    )
+    route = FundHoldingsRoute(
+        holdings=[],
+        source="csindex_official",
+        scope="tracked_index_top10",
+        as_of=report_date,
+        coverage=0.0,
+        tracking=tracking,
+    )
+    product = FundProductInfo(
+        fund_code="510300",
+        fund_name="沪深300ETF",
+        fund_type="指数型-股票",
+        establishment_date=date(2012, 5, 4),
+        scale_report_date=report_date,
+        period_end_net_assets_cny=10_000_000_000,
+        management_fee_pct=0.15,
+        custody_fee_pct=0.05,
+        sales_service_fee_pct=None,
+        benchmark="沪深300指数",
+        raw={},
+    )
+
+    result = analyze_fund(
+        "510300",
+        nav_points,
+        name=product.fund_name,
+        product_info=product,
+        holdings_route=route,
+        benchmark_bars=benchmark_bars,
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    product_dimension = result["assessment"]["dimensions"]["product"]
+    factors = {factor["key"]: factor for factor in product_dimension["factors"]}
+    assert product_dimension["score"] is None
+    assert factors["tracking_error_annualized"]["sample_size"] == 59
+    assert factors["tracking_error_annualized"]["eligible"] is False
 
 
 @pytest.mark.parametrize(
@@ -492,6 +736,35 @@ def test_quality_changes_do_not_rewrite_valuation_dimension() -> None:
 def model_valuation_history(size: int) -> list[StockValuationPoint]:
     start = date(2025, 1, 1)
     return [make_valuation(start + timedelta(days=index), index + 1) for index in range(size)]
+
+
+def tracking_fixture(
+    *,
+    size: int,
+    exposure: float,
+) -> tuple[list[FundNavPoint], list[StockBar]]:
+    start = date(2025, 10, 1)
+    benchmark_level = 1000.0
+    fund_level = 1.0
+    nav_points: list[FundNavPoint] = []
+    benchmark_bars: list[StockBar] = []
+    for index in range(size):
+        if index:
+            benchmark_level *= 1.001
+            fund_level *= 1 + 0.001 * exposure
+        day = start + timedelta(days=index)
+        nav_points.append(
+            FundNavPoint(
+                date=day,
+                unit_nav=fund_level,
+                cumulative_nav=fund_level,
+                daily_growth_pct=None,
+                subscribe_status=None,
+                redeem_status=None,
+            )
+        )
+        benchmark_bars.append(make_bar(day, benchmark_level))
+    return nav_points, benchmark_bars
 
 
 def model_financial_history(org_type: str) -> list:

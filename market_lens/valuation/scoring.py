@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from datetime import date
-from math import isfinite
+from math import isfinite, log10
 from typing import Any, Literal
 
 from market_lens.valuation.metrics import percentile_rank
@@ -114,6 +114,19 @@ def evaluate_factor(
             max((value - definition.anchor_min) / anchor_range, 0),
             1,
         )
+    elif eligible and definition.normalization == "log_linear_anchor":
+        assert definition.anchor_min is not None
+        assert definition.anchor_max is not None
+        assert value is not None
+        if value <= 0 or definition.anchor_min <= 0:
+            eligible = False
+            warnings.append("log_anchor_requires_positive_value")
+        else:
+            anchor_range = log10(definition.anchor_max) - log10(definition.anchor_min)
+            normalized_value = min(
+                max((log10(value) - log10(definition.anchor_min)) / anchor_range, 0),
+                1,
+            )
 
     if eligible and normalized_value is not None:
         score = normalized_value * 100

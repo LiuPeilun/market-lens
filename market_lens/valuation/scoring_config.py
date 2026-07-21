@@ -4,15 +4,17 @@ from dataclasses import dataclass
 from typing import Literal
 
 SCHEMA_VERSION = "2"
-MODEL_VERSION = "valuation-v2.1.0-stock-models"
+MODEL_VERSION = "valuation-v2.2.0-fund-product-models"
 
 DimensionCategory = Literal["valuation", "quality", "product"]
 FactorDirection = Literal["higher_value_higher_score", "lower_value_higher_score"]
 StockModelKey = Literal["generic_non_financial", "bank", "insurance", "securities"]
+FundProductModelKey = Literal["etf", "etf_linked", "index_fund", "active_fund"]
 NormalizationMethod = Literal[
     "historical_percentile",
     "pre_normalized_percentile",
     "linear_anchor",
+    "log_linear_anchor",
 ]
 
 
@@ -39,7 +41,7 @@ class FactorDefinition:
             raise ValueError("minimum sample size must be at least 1")
         if self.full_sample_size is not None and self.full_sample_size < self.minimum_sample_size:
             raise ValueError("full sample size cannot be below minimum sample size")
-        if self.normalization == "linear_anchor":
+        if self.normalization in {"linear_anchor", "log_linear_anchor"}:
             if self.anchor_min is None or self.anchor_max is None:
                 raise ValueError("linear anchor factors require anchor_min and anchor_max")
             if self.anchor_max <= self.anchor_min:
@@ -55,6 +57,14 @@ class StockModelConfig:
     minimum_valuation_weight: float = 0.5
     minimum_quality_weight: float = 0.6
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FundProductModelConfig:
+    key: FundProductModelKey
+    name: str
+    product_factors: tuple[FactorDefinition, ...]
+    minimum_product_weight: float = 0.5
 
 
 STOCK_VALUATION_FACTORS = (
@@ -330,6 +340,158 @@ STOCK_MODEL_CONFIGS: dict[StockModelKey, StockModelConfig] = {
         SECURITIES_MODEL,
     )
 }
+
+
+def product_factor(
+    key: str,
+    name: str,
+    unit: str,
+    weight: float,
+    anchor_min: float,
+    anchor_max: float,
+    *,
+    lower_is_better: bool = False,
+    minimum_sample_size: int = 1,
+    full_sample_size: int | None = None,
+    core: bool = False,
+    logarithmic: bool = False,
+) -> FactorDefinition:
+    return FactorDefinition(
+        key=key,
+        name=name,
+        category="product",
+        unit=unit,
+        weight=weight,
+        direction=(
+            "lower_value_higher_score" if lower_is_better else "higher_value_higher_score"
+        ),
+        normalization="log_linear_anchor" if logarithmic else "linear_anchor",
+        minimum_sample_size=minimum_sample_size,
+        full_sample_size=full_sample_size,
+        core=core,
+        anchor_min=anchor_min,
+        anchor_max=anchor_max,
+    )
+
+
+def index_product_factors(
+    fee_max: float,
+) -> tuple[FactorDefinition, ...]:
+    return (
+        product_factor(
+            "total_annual_fee_pct",
+            "Annual operating fee",
+            "percent",
+            0.30,
+            0.1,
+            fee_max,
+            lower_is_better=True,
+            core=True,
+        ),
+        product_factor(
+            "period_end_net_assets_cny",
+            "Period-end net assets",
+            "cny",
+            0.20,
+            100_000_000,
+            10_000_000_000,
+            logarithmic=True,
+        ),
+        product_factor(
+            "tracking_error_annualized",
+            "Annualized tracking error",
+            "ratio",
+            0.30,
+            0.002,
+            0.04,
+            lower_is_better=True,
+            minimum_sample_size=60,
+            full_sample_size=252,
+            core=True,
+        ),
+        product_factor(
+            "tracking_deviation_abs_annualized",
+            "Absolute annualized tracking deviation",
+            "ratio",
+            0.20,
+            0.0,
+            0.04,
+            lower_is_better=True,
+            minimum_sample_size=60,
+            full_sample_size=252,
+        ),
+    )
+
+
+ETF_PRODUCT_MODEL = FundProductModelConfig(
+    key="etf",
+    name="ETF",
+    product_factors=index_product_factors(1.0),
+)
+
+ETF_LINKED_PRODUCT_MODEL = FundProductModelConfig(
+    key="etf_linked",
+    name="ETF feeder fund",
+    product_factors=index_product_factors(1.5),
+)
+
+INDEX_FUND_PRODUCT_MODEL = FundProductModelConfig(
+    key="index_fund",
+    name="Index fund",
+    product_factors=index_product_factors(1.5),
+)
+
+ACTIVE_FUND_PRODUCT_MODEL = FundProductModelConfig(
+    key="active_fund",
+    name="Active fund",
+    product_factors=(
+        product_factor(
+            "total_annual_fee_pct",
+            "Annual operating fee",
+            "percent",
+            0.60,
+            0.5,
+            2.5,
+            lower_is_better=True,
+            core=True,
+        ),
+        product_factor(
+            "period_end_net_assets_cny",
+            "Period-end net assets",
+            "cny",
+            0.40,
+            100_000_000,
+            10_000_000_000,
+            logarithmic=True,
+        ),
+    ),
+    minimum_product_weight=0.6,
+)
+
+FUND_PRODUCT_MODEL_CONFIGS: dict[FundProductModelKey, FundProductModelConfig] = {
+    model.key: model
+    for model in (
+        ETF_PRODUCT_MODEL,
+        ETF_LINKED_PRODUCT_MODEL,
+        INDEX_FUND_PRODUCT_MODEL,
+        ACTIVE_FUND_PRODUCT_MODEL,
+    )
+}
+
+FUND_UNDERLYING_QUALITY_FACTOR = FactorDefinition(
+    key="underlying_quality_score",
+    name="Holdings-weighted fundamental quality",
+    category="quality",
+    unit="score",
+    weight=1.0,
+    direction="higher_value_higher_score",
+    normalization="linear_anchor",
+    minimum_sample_size=1,
+    full_sample_size=10,
+    core=True,
+    anchor_min=0.0,
+    anchor_max=100.0,
+)
 
 FUND_VALUATION_FACTOR_DIRECTIONS: dict[str, FactorDirection] = {
     "pe_historical_percentile": "higher_value_higher_score",

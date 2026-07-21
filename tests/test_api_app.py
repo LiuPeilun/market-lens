@@ -12,6 +12,7 @@ from market_lens.api.app import (
     to_sse_data,
     verify_tool_approval_signature,
 )
+from market_lens.api.schemas import AnalysisHistoryResponse, AnalyzeResponse, ChatResponse
 from market_lens.storage.supabase import AuthenticatedUser
 
 
@@ -23,6 +24,110 @@ def test_to_sse_data_json_encodes_dates() -> None:
 
     payload = json.loads(data.removeprefix("data: ").strip())
     assert payload == {"type": "meta", "analysis": {"as_of": "2026-07-03"}}
+
+
+def test_api_contract_accepts_v2_assessment_in_analysis_and_stream_meta() -> None:
+    result = analysis_result_payload(include_assessment=True)
+
+    response = AnalyzeResponse.model_validate({"result": result})
+    chat_response = ChatResponse.model_validate(
+        {
+            "answer": "已完成分析",
+            "intent": "explain_valuation",
+            "analysis": result,
+        }
+    )
+    stream_payload = json.loads(
+        to_sse_data({"type": "meta", "analysis": result})
+        .removeprefix("data: ")
+        .strip()
+    )
+
+    assert response.result.assessment is not None
+    assert response.result.assessment.dimensions.quality.score == 72.0
+    assert chat_response.analysis is not None
+    assert chat_response.analysis.assessment is not None
+    assert stream_payload["analysis"]["assessment"]["dimensions"]["valuation"]["score"] == 42.0
+
+
+def test_history_contract_keeps_legacy_results_compatible() -> None:
+    history = AnalysisHistoryResponse.model_validate(
+        {
+            "count": 1,
+            "items": [
+                {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "asset_type": "stock",
+                    "asset_code": "600519",
+                    "asset_name": "贵州茅台",
+                    "request_params": {},
+                    "result": analysis_result_payload(include_assessment=False),
+                    "created_at": "2026-07-21T12:00:00Z",
+                }
+            ],
+        }
+    )
+
+    assert history.items[0].result.assessment is None
+    assert history.items[0].result.valuation["score"] == 42.0
+
+
+def analysis_result_payload(*, include_assessment: bool) -> dict:
+    result = {
+        "asset_type": "stock",
+        "code": "600519",
+        "name": "贵州茅台",
+        "as_of": "2026-07-21",
+        "valuation": {
+            "method": "historical_percentile_multi_factor",
+            "score": 42.0,
+            "level": "normal",
+            "level_zh": "正常估值",
+            "confidence": 0.6,
+        },
+        "performance": {"sample_size": 100},
+        "notes": [],
+    }
+    if include_assessment:
+        dimension = {
+            "model": "generic_non_financial_valuation_v1",
+            "score": 42.0,
+            "level": "normal",
+            "level_zh": "正常估值",
+            "confidence": 0.6,
+            "factors": [],
+            "weight_coverage": 0.8,
+            "data_coverage": 0.8,
+            "sample_adequacy": 1.0,
+            "warnings": [],
+        }
+        result["assessment"] = {
+            "schema_version": "2",
+            "model_version": "valuation-v2.2.0-fund-product-models",
+            "profile": "generic_non_financial",
+            "analysis_as_of": "2026-07-21",
+            "dimensions": {
+                "valuation": dimension,
+                "quality": {
+                    **dimension,
+                    "model": "generic_non_financial_quality_v1",
+                    "score": 72.0,
+                    "level": "high",
+                    "level_zh": "较高",
+                },
+                "product": None,
+            },
+            "overall_confidence": 0.6,
+            "attractiveness": None,
+            "confidence_detail": {},
+            "data_quality": {
+                "sources": [],
+                "warnings": [],
+                "source_as_of": "2026-07-21",
+                "retrieved_at": "2026-07-21T12:00:00Z",
+            },
+        }
+    return result
 
 
 def test_analyze_requires_authentication() -> None:

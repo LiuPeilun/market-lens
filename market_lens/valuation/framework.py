@@ -336,6 +336,12 @@ def build_holdings_portfolio(
             "revenue_growth_pct",
         ),
         "dividend_yield": ("valuation", "dividend", "dividend_yield"),
+        "underlying_quality_score": (
+            "assessment",
+            "dimensions",
+            "quality",
+            "score",
+        ),
     }
     metrics = {
         key: weighted_holding_metric(
@@ -364,6 +370,7 @@ def weighted_holding_metric(
 ) -> dict[str, float | None]:
     weighted_sum = 0.0
     available_weight = 0.0
+    available_count = 0
     for holding in holdings:
         weight = (holding.weight_pct or 0.0) / 100.0
         value = nested_value(analyses.get(holding.code), path)
@@ -371,9 +378,11 @@ def weighted_holding_metric(
             continue
         weighted_sum += float(value) * weight
         available_weight += weight
+        available_count += 1
     return {
         "value": round(weighted_sum / available_weight, 6) if available_weight else None,
         "coverage": round(available_weight, 4),
+        "sample_size": available_count,
     }
 
 

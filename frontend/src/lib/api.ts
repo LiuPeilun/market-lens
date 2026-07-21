@@ -124,6 +124,67 @@ export interface FundHoldingsRouteInfo {
   target_etf_name: string | null
 }
 
+export type AssessmentDimensionCategory = 'valuation' | 'quality' | 'product'
+
+export interface AssessmentFactor {
+  key: string | null
+  name: string | null
+  category: AssessmentDimensionCategory | null
+  value: unknown
+  unit: string | null
+  source_as_of: string | null
+  score: number | null
+  direction: string | null
+  normalization: string | null
+  weight: number | null
+  effective_weight: number | null
+  sample_size: number | null
+  coverage: number | null
+  source: string | null
+  status: string | null
+  reason?: string | null
+}
+
+export interface AssessmentDimension {
+  model: string
+  score: number | null
+  level: string
+  level_zh: string
+  confidence: number
+  factors: AssessmentFactor[]
+  weight_coverage: number
+  data_coverage: number
+  sample_adequacy: number
+  warnings: string[]
+}
+
+export interface ValuationAssessment {
+  schema_version: string
+  model_version: string
+  profile: string
+  analysis_as_of: string | null
+  dimensions: {
+    valuation: AssessmentDimension
+    quality: AssessmentDimension
+    product: AssessmentDimension | null
+  }
+  overall_confidence: number
+  attractiveness: number | null
+  confidence_detail: {
+    components?: Record<string, number>
+    caps?: Array<Record<string, unknown>>
+    reasons?: string[]
+    dimensions?: Record<string, unknown>
+  }
+  data_quality: {
+    sources: Array<Record<string, unknown>>
+    warnings: string[]
+    source_as_of: string | null
+    retrieved_at: string | null
+  }
+  routing?: Record<string, unknown> | null
+}
+
 export interface AnalysisResult {
   asset_type: AssetType
   code: string
@@ -132,6 +193,7 @@ export interface AnalysisResult {
   latest_price?: number | null
   latest_unit_nav?: number | null
   latest_cumulative_nav?: number | null
+  assessment?: ValuationAssessment | null
   valuation: {
     as_of?: string | null
     pe_ttm?: number | null

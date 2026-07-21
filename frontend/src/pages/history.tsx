@@ -88,30 +88,55 @@ export function HistoryPage() {
                       <TableHead>时间</TableHead>
                       <TableHead>标的</TableHead>
                       <TableHead>类型</TableHead>
-                      <TableHead>估值</TableHead>
-                      <TableHead>估值分</TableHead>
-                      <TableHead>置信度</TableHead>
+                      <TableHead>估值位置</TableHead>
+                      <TableHead>质量</TableHead>
+                      <TableHead>产品质量</TableHead>
+                      <TableHead>总体置信度</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(analyses.data?.items ?? []).map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>{formatDateTime(item.created_at)}</TableCell>
-                        <TableCell>
-                          <div className="font-medium">{item.asset_name ?? item.asset_code}</div>
-                          <div className="text-xs text-muted-foreground">{item.asset_code}</div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{item.asset_type === 'stock' ? '股票' : '基金'}</Badge>
-                        </TableCell>
-                        <TableCell>{item.result.valuation.level_zh ?? '—'}</TableCell>
-                        <TableCell>{formatNumber(item.result.valuation.score, 1)}</TableCell>
-                        <TableCell>{formatPercent(item.result.valuation.confidence, 0)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {(analyses.data?.items ?? []).map((item) => {
+                      const dimensions = item.result.assessment?.dimensions
+                      const valuation = dimensions?.valuation
+                      const quality = dimensions?.quality
+                      const product = dimensions?.product
+                      return (
+                        <TableRow key={item.id}>
+                          <TableCell>{formatDateTime(item.created_at)}</TableCell>
+                          <TableCell>
+                            <div className="font-medium">{item.asset_name ?? item.asset_code}</div>
+                            <div className="text-xs text-muted-foreground">{item.asset_code}</div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {item.asset_type === 'stock' ? '股票' : '基金'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <DimensionCell
+                              level={valuation?.level_zh ?? item.result.valuation.level_zh}
+                              score={valuation?.score ?? item.result.valuation.score}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <DimensionCell level={quality?.level_zh} score={quality?.score} />
+                          </TableCell>
+                          <TableCell>
+                            <DimensionCell level={product?.level_zh} score={product?.score} />
+                          </TableCell>
+                          <TableCell>
+                            {formatPercent(
+                              item.result.assessment?.overall_confidence ??
+                                item.result.valuation.confidence,
+                              0,
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                     {!analyses.data?.items.length ? (
                       <TableRow>
-                        <TableCell className="h-24 text-center text-muted-foreground" colSpan={6}>
+                        <TableCell className="h-24 text-center text-muted-foreground" colSpan={7}>
                           还没有分析记录。
                         </TableCell>
                       </TableRow>
@@ -182,6 +207,21 @@ export function HistoryPage() {
         </TabsContent>
       </Tabs>
     </main>
+  )
+}
+
+function DimensionCell({
+  level,
+  score,
+}: {
+  level: string | null | undefined
+  score: number | null | undefined
+}) {
+  return (
+    <div>
+      <div>{level ?? '—'}</div>
+      <div className="text-xs text-muted-foreground">{formatNumber(score, 1)}</div>
+    </div>
   )
 }
 

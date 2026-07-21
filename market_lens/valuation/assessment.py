@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from math import isfinite
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, cast
 
 from market_lens.types import StockFinancialIndicator, StockProfile, StockValuationPoint
 from market_lens.valuation.confidence import (
@@ -13,11 +13,15 @@ from market_lens.valuation.confidence import (
 from market_lens.valuation.framework import LEVEL_LABELS_ZH, valuation_level
 from market_lens.valuation.scoring import FactorObservation, score_dimension
 from market_lens.valuation.scoring_config import (
+    FUND_PRODUCT_MODEL_CONFIGS,
+    FUND_UNDERLYING_QUALITY_FACTOR,
     FUND_VALUATION_FACTOR_DIRECTIONS,
     LEGACY_FUND_FACTOR_WEIGHTS,
     MODEL_VERSION,
     SCHEMA_VERSION,
     STOCK_MODEL_CONFIGS,
+    FactorDefinition,
+    FundProductModelKey,
     StockModelConfig,
     StockModelKey,
 )
@@ -382,7 +386,8 @@ def build_fund_assessment(
     score = valuation.get("score")
     level = valuation_level(score)
     confidence = float(valuation.get("confidence") or 0.0)
-    dimension = {
+    valuation_dimension = {
+        "model": "legacy_fund_valuation_v1",
         "score": score,
         "level": level,
         "level_zh": LEVEL_LABELS_ZH[level],
@@ -401,10 +406,10 @@ def build_fund_assessment(
     holdings_route = valuation.get("holdings_route") or result.get("holdings_route") or {}
     method_quality = 0.6 if valuation.get("status") == "proxy_valuation" else 1.0
     route_quality = fund_route_quality(holdings_route, valuation)
-    confidence_detail = calculate_confidence(
+    valuation_confidence = calculate_confidence(
         {
             "legacy_dimension_confidence": confidence,
-            "factor_coverage": dimension["weight_coverage"],
+            "factor_coverage": valuation_dimension["weight_coverage"],
             "route_quality": route_quality,
             "method_quality": method_quality,
         },
@@ -412,9 +417,75 @@ def build_fund_assessment(
         if valuation.get("status") == "proxy_valuation"
         else None,
     )
-    dimension["legacy_confidence"] = confidence
-    dimension["confidence"] = min(confidence, confidence_detail["score"])
-    dimensions = {"valuation": dimension, "quality": None, "product": None}
+    valuation_dimension["legacy_confidence"] = confidence
+    valuation_dimension["confidence"] = min(confidence, valuation_confidence["score"])
+
+    product_profile = fund_product_profile(product_data, valuation)
+    product_model = FUND_PRODUCT_MODEL_CONFIGS[product_profile]
+    product_scored = score_dimension(
+        product_model.product_factors,
+        build_fund_product_observations(product_model.product_factors, product_data),
+        minimum_effective_weight=product_model.minimum_product_weight,
+    )
+    product_confidence = calculate_confidence(
+        {
+            "source_success": source_status_component(
+                str(product_diagnostic.get("status") or "unavailable")
+            ),
+            "freshness": freshness_component(
+                analysis_as_of,
+                parse_iso_date(product_diagnostic.get("source_as_of")),
+                full_freshness_days=190,
+                decay_days=175,
+            ),
+            "factor_coverage": product_scored["weight_coverage"],
+            "data_coverage": product_scored["data_coverage"],
+            "sample_adequacy": product_scored["sample_adequacy"],
+            "method_quality": fund_product_method_quality(product_data),
+        },
+        caps=fund_product_confidence_caps(product_data),
+    )
+    product_dimension = build_dimension(
+        product_scored,
+        product_confidence["score"],
+        category="product",
+        model=f"{product_profile}_product_v1",
+        extra_warnings=list((product_data.get("routing") or {}).get("warnings") or []),
+    )
+
+    quality_scored = score_dimension(
+        (FUND_UNDERLYING_QUALITY_FACTOR,),
+        build_fund_quality_observations(valuation, holdings_route),
+        minimum_effective_weight=1.0,
+    )
+    quality_confidence = calculate_confidence(
+        {
+            "source_success": 1.0 if quality_scored["weight_coverage"] else 0.0,
+            "freshness": freshness_component(
+                analysis_as_of,
+                parse_iso_date(holdings_route.get("as_of")),
+                full_freshness_days=120,
+                decay_days=245,
+            ),
+            "factor_coverage": quality_scored["weight_coverage"],
+            "data_coverage": quality_scored["data_coverage"],
+            "sample_adequacy": quality_scored["sample_adequacy"],
+            "route_quality": fund_route_quality(holdings_route, valuation),
+            "method_quality": fund_quality_method_quality(holdings_route),
+        },
+        caps=fund_quality_confidence_caps(holdings_route),
+    )
+    quality_dimension = build_dimension(
+        quality_scored,
+        quality_confidence["score"],
+        category="quality",
+        model="fund_underlying_holdings_quality_v1",
+    )
+    dimensions = {
+        "valuation": valuation_dimension,
+        "quality": quality_dimension,
+        "product": product_dimension,
+    }
     sources = [
         {
             "key": "fund_valuation_route",
@@ -427,18 +498,167 @@ def build_fund_assessment(
             "reasons": holdings_route.get("fallback_reasons") or [],
         },
         {"key": "fund_product", **product_diagnostic},
+        {
+            "key": "fund_tracking",
+            **(product_data.get("tracking") or {}),
+            "retrieved_at": utc_isoformat(retrieved_at),
+        },
     ]
     warnings = collect_warnings({"warnings": []}, sources)
+    warnings.extend(quality_scored.get("warnings") or [])
+    warnings.extend(product_scored.get("warnings") or [])
+    warnings.extend((product_data.get("routing") or {}).get("warnings") or [])
+    confidence_detail = combine_named_confidence(
+        {
+            "valuation": valuation_confidence,
+            "quality": quality_confidence,
+            "product": product_confidence,
+        }
+    )
     return build_assessment(
-        profile=str(valuation.get("profile") or "fund"),
+        profile=product_profile,
         analysis_as_of=analysis_as_of,
         dimensions=dimensions,
         confidence_detail=confidence_detail,
         sources=sources,
-        warnings=warnings,
+        warnings=list(dict.fromkeys(warnings)),
         source_as_of=source_as_of,
         retrieved_at=retrieved_at,
+        routing=product_data.get("routing") or None,
     )
+
+
+def fund_product_profile(
+    product_data: dict[str, Any],
+    valuation: dict[str, Any],
+) -> FundProductModelKey:
+    profile = str(product_data.get("profile") or "")
+    if profile in FUND_PRODUCT_MODEL_CONFIGS:
+        return cast(FundProductModelKey, profile)
+    if valuation.get("profile") in {"index_etf", "index_fund"}:
+        return "index_fund"
+    return "active_fund"
+
+
+def build_fund_product_observations(
+    definitions: tuple[FactorDefinition, ...],
+    product_data: dict[str, Any],
+) -> dict[str, FactorObservation]:
+    diagnostic = product_data.get("diagnostic") or {}
+    diagnostic_status = str(diagnostic.get("status") or "unavailable")
+    product_source_as_of = parse_iso_date(diagnostic.get("source_as_of"))
+    tracking = product_data.get("tracking") or {}
+    tracking_status = str(tracking.get("status") or "unavailable")
+    tracking_source_as_of = parse_iso_date(tracking.get("source_as_of"))
+    values = {
+        "total_annual_fee_pct": (product_data.get("fees") or {}).get(
+            "total_annual_fee_pct"
+        ),
+        "period_end_net_assets_cny": (product_data.get("scale") or {}).get(
+            "period_end_net_assets_cny"
+        ),
+        "tracking_error_annualized": tracking.get("tracking_error_annualized"),
+        "tracking_deviation_abs_annualized": tracking.get(
+            "tracking_deviation_abs_annualized"
+        ),
+    }
+    observations: dict[str, FactorObservation] = {}
+    for definition in definitions:
+        is_tracking = definition.key.startswith("tracking_")
+        value = to_finite_float(values.get(definition.key))
+        status = (
+            factor_source_status(tracking_status, value)
+            if is_tracking
+            else factor_source_status(diagnostic_status, value)
+        )
+        observations[definition.key] = FactorObservation(
+            value=value,
+            source=(
+                "eastmoney_fund_nav_and_tracked_index_history"
+                if is_tracking
+                else "eastmoney_fund_mobile_detail"
+            ),
+            source_as_of=tracking_source_as_of if is_tracking else product_source_as_of,
+            status=status,
+            sample_size=int(tracking.get("sample_size") or 0) if is_tracking else 1,
+            coverage=1.0 if value is not None else 0.0,
+            warnings=tuple(str(item) for item in tracking.get("warnings") or [])
+            if is_tracking
+            else (),
+        )
+    return observations
+
+
+def build_fund_quality_observations(
+    valuation: dict[str, Any],
+    holdings_route: dict[str, Any],
+) -> dict[str, FactorObservation]:
+    metric = (
+        ((valuation.get("portfolio") or {}).get("metrics") or {}).get(
+            "underlying_quality_score"
+        )
+        or {}
+    )
+    value = to_finite_float(metric.get("value"))
+    return {
+        "underlying_quality_score": FactorObservation(
+            value=value,
+            source=str(holdings_route.get("source") or "unavailable"),
+            source_as_of=parse_iso_date(holdings_route.get("as_of")),
+            status="available" if value is not None else "missing",
+            sample_size=int(metric.get("sample_size") or 0),
+            coverage=float(metric.get("coverage") or 0.0),
+        )
+    }
+
+
+def factor_source_status(status: str, value: float | None) -> str:
+    if status in {"error", "stale", "invalid"}:
+        return status
+    if status == "not_applicable":
+        return "not_applicable"
+    return "available" if value is not None else "missing"
+
+
+def fund_product_method_quality(product_data: dict[str, Any]) -> float:
+    tracking = product_data.get("tracking") or {}
+    if tracking.get("status") == "not_applicable":
+        return 1.0
+    if tracking.get("status") != "available":
+        return 0.5
+    return 0.8 if tracking.get("warnings") else 1.0
+
+
+def fund_product_confidence_caps(
+    product_data: dict[str, Any],
+) -> list[tuple[str, float]]:
+    warnings = set((product_data.get("tracking") or {}).get("warnings") or [])
+    if "target_etf_nav_return_proxy" in warnings:
+        return [("target_etf_nav_return_proxy", 0.75)]
+    if "tracked_index_price_return_proxy" in warnings:
+        return [("tracked_index_price_return_proxy", 0.8)]
+    return []
+
+
+def fund_quality_method_quality(route: dict[str, Any]) -> float:
+    return {
+        "tracked_index_top10": 0.9,
+        "target_etf_top10": 0.7,
+        "fund_direct_top10": 0.65,
+    }.get(str(route.get("scope") or ""), 0.0)
+
+
+def fund_quality_confidence_caps(
+    route: dict[str, Any],
+) -> list[tuple[str, float]]:
+    scope = route.get("scope")
+    if scope == "tracked_index_top10":
+        return [("top_index_constituents_only", 0.8)]
+    if scope == "target_etf_top10":
+        return [("target_etf_top_holdings_only", 0.65)]
+    if scope == "fund_direct_top10":
+        return [("fund_top_holdings_only", 0.6)]
+    return []
 
 
 def build_dimension(
@@ -450,7 +670,7 @@ def build_dimension(
     extra_warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     score = scored.get("score")
-    if category == "quality":
+    if category in {"quality", "product"}:
         level, level_zh = quality_level(score)
     else:
         level = valuation_level(score)
@@ -489,25 +709,30 @@ def combine_dimension_confidence(
     valuation: dict[str, Any],
     quality: dict[str, Any],
 ) -> dict[str, Any]:
+    return combine_named_confidence({"valuation": valuation, "quality": quality})
+
+
+def combine_named_confidence(
+    details: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    scores = [float(detail.get("score") or 0.0) for detail in details.values()]
     return {
+        "score": round(min(scores), 4) if scores else 0.0,
         "components": {
-            "valuation": valuation.get("score", 0.0),
-            "quality": quality.get("score", 0.0),
+            dimension: detail.get("score", 0.0)
+            for dimension, detail in details.items()
         },
         "caps": [
             {"dimension": dimension, **cap}
-            for dimension, detail in (("valuation", valuation), ("quality", quality))
+            for dimension, detail in details.items()
             for cap in detail.get("caps", [])
         ],
         "reasons": [
             f"{dimension}:{reason}"
-            for dimension, detail in (("valuation", valuation), ("quality", quality))
+            for dimension, detail in details.items()
             for reason in detail.get("reasons", [])
         ],
-        "dimensions": {
-            "valuation": valuation,
-            "quality": quality,
-        },
+        "dimensions": details,
     }
 
 
@@ -681,7 +906,7 @@ def collect_warnings(
     warnings = list(scored.get("warnings") or [])
     for source in sources:
         status = source.get("status")
-        if status not in {None, "available"}:
+        if status not in {None, "available", "not_applicable"}:
             warnings.append(f"source_{source.get('key')}:{status}")
         warnings.extend(source.get("degradation_reasons") or [])
         reason = source.get("reason")

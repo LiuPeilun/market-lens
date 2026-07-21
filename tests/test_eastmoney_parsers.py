@@ -23,6 +23,7 @@ from market_lens.data.eastmoney import (
     parse_fund_product_info,
     parse_fund_tracking_info,
     parse_pingzhongdata_fund_name,
+    parse_sina_index_history,
     parse_stock_dividend_plan,
     parse_stock_financial_indicator,
     parse_stock_kline,
@@ -54,6 +55,19 @@ def test_parse_stock_kline() -> None:
     assert row.date.isoformat() == "2026-07-02"
     assert row.close == 10.2
     assert row.turnover_pct == 3.4
+
+
+def test_parse_sina_index_history() -> None:
+    rows = parse_sina_index_history(
+        'var _data=([{"day":"2026-07-20","open":"4500.0",'
+        '"high":"4600.0","low":"4490.0","close":"4598.3",'
+        '"volume":"33311605800"}]);'
+    )
+
+    assert len(rows) == 1
+    assert rows[0].date == date(2026, 7, 20)
+    assert rows[0].close == 4598.3
+    assert parse_sina_index_history("var _data=(null);") == []
 
 
 def test_parse_stock_profile() -> None:
@@ -329,6 +343,24 @@ def test_parse_fund_tracking_and_target_etf() -> None:
     assert position["target_etf_code"] == "159326"
     assert position["holdings"][0].weight_pct == 0.25
     assert position["report_date"].isoformat() == "2026-06-30"
+
+
+def test_parse_fund_tracking_treats_placeholder_index_as_missing() -> None:
+    tracking = parse_fund_tracking_info(
+        {
+            "Datas": {
+                "FCODE": "000001",
+                "SHORTNAME": "华夏成长混合",
+                "FTYPE": "混合型-灵活",
+                "INDEXCODE": "--",
+                "INDEXNAME": "--",
+            },
+            "ErrCode": 0,
+        }
+    )
+
+    assert tracking.index_code is None
+    assert tracking.index_name is None
 
 
 def test_parse_fund_product_info() -> None:

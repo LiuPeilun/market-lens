@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
+
 from market_lens.data.eastmoney import parse_stock_financial_indicator
 from market_lens.types import (
     FundHolding,
@@ -326,7 +328,8 @@ def test_fund_product_diagnostics_cover_available_partial_stale_and_error() -> N
 
     assert available["diagnostic"]["status"] == "available"
     assert available["scale"]["source_field"] == "ENDNAV"
-    assert available["scoring_eligible"] is False
+    assert available["scoring_eligible"] is True
+    assert available["fees"]["total_annual_fee_pct"] == pytest.approx(0.2)
     assert partial["diagnostic"]["status"] == "partial"
     assert stale["diagnostic"]["status"] == "stale"
     assert error["diagnostic"]["status"] == "error"

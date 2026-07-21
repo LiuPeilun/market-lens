@@ -368,14 +368,24 @@ def build_answer(intent: ChatIntent, message: str, analysis: dict[str, Any]) -> 
     asset_label = format_asset_label(analysis)
     valuation = analysis.get("valuation") or {}
     performance = analysis.get("performance") or {}
+    assessment = analysis.get("assessment") or {}
+    dimensions = assessment.get("dimensions") or {}
+    valuation_dimension = dimensions.get("valuation") or valuation
+    quality_dimension = dimensions.get("quality")
+    product_dimension = dimensions.get("product")
+    overall_confidence = assessment.get("overall_confidence")
+    if overall_confidence is None:
+        overall_confidence = valuation_dimension.get("confidence")
 
     if intent == "data_source":
         method = valuation.get("method") or "unknown"
         data_source = analysis.get("data_source") or "market_data"
         return (
-            f"{asset_label} 的分析数据源是 {data_source}，估值方法是 {method}。"
-            f"当前估值结论为 {valuation.get('level_zh') or '未知'}，"
-            f"置信度为 {format_confidence(valuation.get('confidence'))}。"
+            f"{asset_label} 的分析数据源是 {data_source}，"
+            f"估值方法是 {format_valuation_method(method)}。"
+            f"当前估值位置为 {valuation_dimension.get('level_zh') or '未知'}，"
+            f"估值维度置信度为 {format_confidence(valuation_dimension.get('confidence'))}；"
+            f"总体置信度为 {format_confidence(overall_confidence)}。"
         )
 
     if intent == "risk_summary":
@@ -394,19 +404,36 @@ def build_answer(intent: ChatIntent, message: str, analysis: dict[str, Any]) -> 
         )
 
     if intent == "explain_valuation":
-        return (
-            f"{asset_label} 当前综合估值为 {valuation.get('level_zh') or '未知'}，"
-            f"估值分为 {format_score(valuation.get('score'))}，"
-            f"置信度为 {format_confidence(valuation.get('confidence'))}。"
-            f"使用的方法是 {valuation.get('method') or 'unknown'}。"
+        parts = [
+            f"{asset_label} 当前估值位置为 {valuation_dimension.get('level_zh') or '未知'}，"
+            f"估值分为 {format_score(valuation_dimension.get('score'))}，"
+            f"该维度置信度为 {format_confidence(valuation_dimension.get('confidence'))}。"
+        ]
+        if quality_dimension:
+            parts.append(format_dimension_summary("底层资产质量", quality_dimension))
+        if product_dimension:
+            parts.append(format_dimension_summary("基金产品质量", product_dimension))
+        parts.append(
+            f"总体置信度为 {format_confidence(overall_confidence)}。"
+            "这些维度相互独立，当前不合成为未经回测的吸引力评级。"
         )
+        return "".join(parts)
 
-    return (
-        f"{asset_label} 已完成分析。综合估值为 {valuation.get('level_zh') or '未知'}，"
-        f"估值分为 {format_score(valuation.get('score'))}；"
+    parts = [
+        f"{asset_label} 已完成分析。估值位置为 "
+        f"{valuation_dimension.get('level_zh') or '未知'}，"
+        f"估值分为 {format_score(valuation_dimension.get('score'))}。"
+    ]
+    if quality_dimension:
+        parts.append(format_dimension_summary("底层资产质量", quality_dimension))
+    if product_dimension:
+        parts.append(format_dimension_summary("基金产品质量", product_dimension))
+    parts.append(
+        f"总体置信度为 {format_confidence(overall_confidence)}；"
         f"区间总收益为 {performance.get('total_return_text') or '暂无'}，"
         f"最大回撤为 {performance.get('max_drawdown_text') or '暂无'}。"
     )
+    return "".join(parts)
 
 
 def build_citations(analysis: dict[str, Any]) -> list[str]:
@@ -414,7 +441,9 @@ def build_citations(analysis: dict[str, Any]) -> list[str]:
     citations = ["收益和回撤来自历史行情/净值数据。"]
     method = valuation.get("method")
     if method == "index_price_percentile_proxy":
-        citations.append("ETF 估值使用跟踪指数价格历史分位作为代理。")
+        citations.append(
+            "ETF 估值使用跟踪指数价格历史分位作为价格位置代理，不代表成分股基本面估值。"
+        )
     elif method == "historical_percentile_multi_factor":
         citations.append("股票估值使用 PE/PB/PS/PCF 等历史分位综合评分。")
     elif method:
@@ -440,6 +469,22 @@ def format_confidence(value: Any) -> str:
     if isinstance(value, int | float):
         return f"{value * 100:.0f}%"
     return "暂无"
+
+
+def format_dimension_summary(label: str, dimension: dict[str, Any]) -> str:
+    return (
+        f"{label}为 {dimension.get('level_zh') or '未知'}，"
+        f"得分 {format_score(dimension.get('score'))}，"
+        f"置信度 {format_confidence(dimension.get('confidence'))}。"
+    )
+
+
+def format_valuation_method(method: str) -> str:
+    labels = {
+        "index_price_percentile_proxy": "跟踪指数历史价格分位（价格位置代理）",
+        "historical_percentile_multi_factor": "历史估值因子分位模型",
+    }
+    return labels.get(method, method)
 
 
 def _tool_citations(traces: list[ToolTrace]) -> list[str]:

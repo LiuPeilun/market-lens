@@ -7,14 +7,18 @@ import {
   Activity,
   Check,
   Database,
+  Gauge,
   History as HistoryIcon,
+  Layers3,
   LogOut,
   MessageCircle,
+  PackageCheck,
   RotateCcw,
   Search,
   Send,
   Server,
   ShieldAlert,
+  ShieldCheck,
   TrendingDown,
   TrendingUp,
   X,
@@ -40,6 +44,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   type AssetType,
   type AssetSearchResult,
+  type AssessmentDimension,
   type AnalysisResult,
   type ChatStreamEvent,
   type ToolApproval,
@@ -603,6 +608,7 @@ export function DashboardPage() {
           ) : null}
 
           <MetricGrid isBusy={isBusy} result={result} />
+          <AssessmentOverview isBusy={isBusy} result={result} />
 
           <Card>
             <CardHeader className="flex-row items-center justify-between">
@@ -851,21 +857,6 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
       value: formatNumber(price),
     },
     {
-      icon: <Activity className="size-4 text-primary" />,
-      label: '综合估值',
-      value: valuation?.level_zh ?? '—',
-    },
-    {
-      icon: <Activity className="size-4 text-primary" />,
-      label: '估值分',
-      value: formatNumber(valuation?.score, 1),
-    },
-    {
-      icon: <Activity className="size-4 text-primary" />,
-      label: '置信度',
-      value: formatPercent(valuation?.confidence, 0),
-    },
-    {
       icon: <TrendingUp className="size-4 text-primary" />,
       label: '总收益',
       value: formatPercent(result?.performance.total_return),
@@ -941,8 +932,12 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground">估值策略</div>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Badge variant="warning">{result?.valuation.profile_name ?? '—'}</Badge>
-              <Badge variant="secondary">{formatLabel(result?.valuation.confidence_label)}</Badge>
+              <Badge variant="warning">
+                {result?.assessment?.profile ?? result?.valuation.profile_name ?? '—'}
+              </Badge>
+              <Badge variant="secondary">
+                {result?.assessment?.model_version ?? formatLabel(result?.valuation.confidence_label)}
+              </Badge>
               {result?.asset_type === 'stock' ? (
                 <>
                   <Badge variant="outline">PE {formatLabel(result?.valuation.pe_ttm_label)}</Badge>
@@ -955,6 +950,130 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
       </Card>
     </div>
   )
+}
+
+function AssessmentOverview({
+  isBusy,
+  result,
+}: {
+  isBusy: boolean
+  result: AnalysisResult | undefined
+}) {
+  const assessment = resolveAssessment(result)
+  const qualityLabel = result?.asset_type === 'fund' ? '底层资产质量' : '基本面质量'
+  const dimensions = [
+    {
+      dimension: assessment.valuation,
+      icon: <Gauge className="size-4 text-primary" />,
+      label: '估值位置',
+    },
+    {
+      dimension: assessment.quality,
+      icon: <Layers3 className="size-4 text-emerald-600" />,
+      label: qualityLabel,
+    },
+    ...(assessment.product
+      ? [
+          {
+            dimension: assessment.product,
+            icon: <PackageCheck className="size-4 text-amber-600" />,
+            label: '基金产品质量',
+          },
+        ]
+      : []),
+  ]
+
+  return (
+    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      {dimensions.map(({ dimension, icon, label }) => (
+        <Card key={label}>
+          <CardContent className="min-h-40 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                {icon}
+                {label}
+              </div>
+              <Badge variant="outline">{dimension?.level_zh ?? '未知'}</Badge>
+            </div>
+            {isBusy ? (
+              <Skeleton className="mt-5 h-10 w-28" />
+            ) : (
+              <div className="mt-4 text-3xl font-semibold">
+                {formatNumber(dimension?.score, 1)}
+              </div>
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-muted-foreground">
+              <div>
+                <div>维度置信度</div>
+                <div className="mt-1 text-sm font-medium text-foreground">
+                  {formatPercent(dimension?.confidence, 0)}
+                </div>
+              </div>
+              <div>
+                <div>因子覆盖</div>
+                <div className="mt-1 text-sm font-medium text-foreground">
+                  {formatPercent(dimension?.weight_coverage, 0)}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+      <Card>
+        <CardContent className="min-h-40 p-4">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <ShieldCheck className="size-4 text-sky-600" />
+            总体置信度
+          </div>
+          {isBusy ? (
+            <Skeleton className="mt-5 h-10 w-28" />
+          ) : (
+            <div className="mt-4 text-3xl font-semibold">
+              {formatPercent(assessment.overallConfidence, 0)}
+            </div>
+          )}
+          <div className="mt-4 text-xs leading-relaxed text-muted-foreground">
+            按各有效评分维度保守聚合
+            {result?.assessment?.analysis_as_of ? ` · ${result.assessment.analysis_as_of}` : ''}
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  )
+}
+
+function resolveAssessment(result: AnalysisResult | undefined): {
+  valuation: AssessmentDimension | null
+  quality: AssessmentDimension | null
+  product: AssessmentDimension | null
+  overallConfidence: number | null
+} {
+  if (result?.assessment) {
+    return {
+      ...result.assessment.dimensions,
+      overallConfidence: result.assessment.overall_confidence,
+    }
+  }
+  if (!result) {
+    return { overallConfidence: null, product: null, quality: null, valuation: null }
+  }
+  return {
+    valuation: {
+      confidence: result.valuation.confidence ?? 0,
+      data_coverage: result.valuation.factor_coverage ?? 0,
+      factors: [],
+      level: result.valuation.level ?? 'unknown',
+      level_zh: result.valuation.level_zh ?? '未知',
+      model: result.valuation.method ?? 'legacy',
+      sample_adequacy: 0,
+      score: result.valuation.score ?? null,
+      warnings: [],
+      weight_coverage: result.valuation.factor_coverage ?? 0,
+    },
+    quality: null,
+    product: null,
+    overallConfidence: result.valuation.confidence ?? null,
+  }
 }
 
 function formatAssetLabel(name: string | null | undefined, code: string | null | undefined) {

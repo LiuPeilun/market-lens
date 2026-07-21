@@ -138,6 +138,30 @@ def test_compact_analysis_keeps_factor_diagnostics_without_history() -> None:
                 },
                 "product_data": {"diagnostic": {"status": "unavailable"}},
             },
+            "assessment": {
+                "schema_version": "2",
+                "model_version": "valuation-v2.2.0-fund-product-models",
+                "dimensions": {
+                    "valuation": {
+                        "score": 42.0,
+                        "factors": [
+                            {
+                                "key": "pe_ttm_percentile",
+                                "source_as_of": "2026-07-20",
+                                "source": "eastmoney",
+                            }
+                        ],
+                    },
+                    "quality": {"score": 72.0, "factors": []},
+                    "product": None,
+                },
+                "overall_confidence": 0.55,
+                "attractiveness": None,
+                "data_quality": {
+                    "sources": [{"key": "stock_valuation", "status": "available"}],
+                    "warnings": [],
+                },
+            },
         }
     )
 
@@ -146,3 +170,9 @@ def test_compact_analysis_keeps_factor_diagnostics_without_history() -> None:
     assert factor_data["latest"]["industry_specific"]["roic_pct"] == 31.42
     assert "history" not in factor_data
     assert compact["valuation"]["product_data"]["diagnostic"]["status"] == "unavailable"
+    assert compact["assessment"]["dimensions"]["quality"]["score"] == 72.0
+    assert compact["assessment"]["dimensions"]["valuation"]["factors"][0][
+        "source_as_of"
+    ] == "2026-07-20"
+    assert compact["assessment"]["data_quality"]["sources"][0]["status"] == "available"
+    assert compact["assessment"]["attractiveness"] is None

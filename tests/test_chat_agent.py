@@ -48,6 +48,31 @@ class FakeAnalysisAgent:
                 "level_zh": "正常估值偏上",
                 "confidence": 0.6,
             },
+            "assessment": {
+                "schema_version": "2",
+                "model_version": "valuation-v2.2.0-fund-product-models",
+                "profile": "etf",
+                "analysis_as_of": "2026-07-03",
+                "dimensions": {
+                    "valuation": {
+                        "score": 72.34,
+                        "level_zh": "正常估值偏上",
+                        "confidence": 0.6,
+                    },
+                    "quality": {
+                        "score": 68.0,
+                        "level_zh": "较高",
+                        "confidence": 0.5,
+                    },
+                    "product": {
+                        "score": 80.0,
+                        "level_zh": "很高",
+                        "confidence": 0.8,
+                    },
+                },
+                "overall_confidence": 0.5,
+                "attractiveness": None,
+            },
             "performance": {
                 "sample_size": 100,
                 "total_return": 0.2,
@@ -136,6 +161,10 @@ def test_chat_agent_resolves_asset_and_answers_valuation() -> None:
     assert result["asset"]["code"] == "515450"
     assert result["analysis"]["valuation"]["score"] == 72.34
     assert "正常估值偏上" in result["answer"]
+    assert "底层资产质量" in result["answer"]
+    assert "基金产品质量" in result["answer"]
+    assert "不合成为未经回测的吸引力评级" in result["answer"]
+    assert any("价格位置代理" in citation for citation in result["citations"])
 
 
 def test_chat_agent_uses_context_for_follow_up() -> None:
@@ -194,6 +223,7 @@ def test_chat_agent_streams_llm_answer() -> None:
 
     assert events[0]["type"] == "meta"
     assert events[0]["asset"]["code"] == "515450"
+    assert events[0]["analysis"]["assessment"]["overall_confidence"] == 0.5
     assert events[1]["type"] == "citations"
     events.pop(1)
     assert events[1] == {"type": "token", "delta": "流式"}

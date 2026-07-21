@@ -552,6 +552,35 @@ class EastmoneyClient:
         klines = data.get("klines") or []
         return [parse_stock_kline(item) for item in klines]
 
+    def get_sina_index_history(
+        self,
+        index_code: str,
+        quote_id: str,
+        start: date,
+        end: date,
+    ) -> list[StockBar]:
+        market = quote_id.partition(".")[0]
+        symbol_prefix = {"0": "sz", "1": "sh"}.get(market)
+        if symbol_prefix is None or not re.fullmatch(r"\d{6}", index_code):
+            return []
+        params = {
+            "symbol": f"{symbol_prefix}{index_code}",
+            "scale": "240",
+            "ma": "no",
+            "datalen": "1023",
+        }
+        url = (
+            "https://quotes.sina.cn/cn/api/jsonp.php/var%20_data=/"
+            "CN_MarketDataService.getKLineData?"
+            + urlencode(params)
+        )
+        text = self._get_text(url, ttl_seconds=12 * 60 * 60)
+        return [
+            item
+            for item in parse_sina_index_history(text)
+            if start <= item.date <= end
+        ]
+
     def search_assets(
         self,
         keyword: str,
@@ -733,6 +762,9 @@ class EastmoneyClient:
             headers["Referer"] = "https://emweb.securities.eastmoney.com/"
         elif host == "searchapi.eastmoney.com":
             headers["Referer"] = "https://quote.eastmoney.com/"
+        elif host == "quotes.sina.cn":
+            headers["Accept"] = "application/json,text/javascript,*/*;q=0.8"
+            headers["Referer"] = "https://finance.sina.com.cn/"
         return headers
 
 
@@ -1174,12 +1206,18 @@ def parse_fund_tracking_info(payload: dict[str, Any]) -> FundTrackingInfo:
     fund_code = re.sub(r"\D", "", str(data.get("FCODE") or ""))
     if len(fund_code) != 6:
         raise EastmoneyError("Failed to resolve fund tracking information: invalid fund code")
+    index_code = str(data.get("INDEXCODE") or "").strip()
+    if index_code in {"", "-", "--"}:
+        index_code = None
+    index_name = repair_mojibake(data.get("INDEXNAME"))
+    if index_name in {"", "-", "--"}:
+        index_name = None
     return FundTrackingInfo(
         fund_code=fund_code,
         fund_name=repair_mojibake(data.get("SHORTNAME")),
         fund_type=repair_mojibake(data.get("FTYPE")),
-        index_code=str(data.get("INDEXCODE") or "").strip() or None,
-        index_name=repair_mojibake(data.get("INDEXNAME")),
+        index_code=index_code,
+        index_name=index_name,
         target_etf_code=None,
         target_etf_name=None,
     )
@@ -1361,6 +1399,36 @@ def parse_fund_nav_table(content: str) -> list[FundNavPoint]:
             )
         )
     return rows
+
+
+def parse_sina_index_history(text: str) -> list[StockBar]:
+    match = re.search(r"var\s+_data=\((null|\[.*\])\);", text, re.S)
+    if not match or match.group(1) == "null":
+        return []
+    try:
+        raw_rows = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise EastmoneyError("Unexpected Sina index history response") from exc
+    rows: list[StockBar] = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            StockBar(
+                date=parse_date(str(row["day"])),
+                open=to_float(row.get("open")),
+                close=to_float(row.get("close")),
+                high=to_float(row.get("high")),
+                low=to_float(row.get("low")),
+                volume=to_float(row.get("volume")),
+                amount=None,
+                amplitude_pct=None,
+                change_pct=None,
+                change_amount=None,
+                turnover_pct=None,
+            )
+        )
+    return sorted(rows, key=lambda item: item.date)
 
 
 def parse_fund_nav_row(row: Any) -> FundNavPoint | None:

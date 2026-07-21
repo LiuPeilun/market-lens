@@ -20,6 +20,7 @@ from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext
 from market_lens.agent.market_agent import MarketAnalysisAgent
 from market_lens.api.auth import get_current_user
 from market_lens.api.schemas import (
+    AnalysisHistoryResponse,
     AnalyzeRequest,
     AnalyzeResponse,
     AssetSearchResponse,
@@ -576,16 +577,16 @@ def resume_tool_approval(
     )
 
 
-@app.get("/api/history/analyses")
+@app.get("/api/history/analyses", response_model=AnalysisHistoryResponse)
 def analysis_history(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
-) -> dict[str, Any]:
+) -> AnalysisHistoryResponse:
     try:
         items = get_repository().list_analyses(user, limit)
     except SupabaseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"count": len(items), "items": items}
+    return AnalysisHistoryResponse(count=len(items), items=items)
 
 
 @app.get("/api/history/chat-sessions")

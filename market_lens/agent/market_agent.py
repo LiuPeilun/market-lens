@@ -11,8 +11,11 @@ from market_lens.data.eastmoney import (
     stock_bars_from_valuations,
 )
 from market_lens.types import (
+    AssetSearchResult,
     FundHolding,
     FundHoldingsRoute,
+    FundNavPoint,
+    StockBar,
     StockIndustryValuationSnapshot,
     StockValuationPoint,
 )
@@ -120,6 +123,11 @@ class MarketAnalysisAgent:
                 holdings = holdings_route.holdings
             except EastmoneyError:
                 holdings = []
+            index_candidate, index_bars, benchmark_source = self._load_tracked_index_history(
+                holdings_route,
+                start=start,
+                end=end,
+            )
             holding_analyses = self._analyze_fund_holdings(holdings, end=end)
             result = analyze_fund(
                 code,
@@ -129,6 +137,10 @@ class MarketAnalysisAgent:
                 holding_analyses=holding_analyses,
                 product_info=product_info,
                 product_info_error=product_info_error,
+                holdings_route=holdings_route,
+                benchmark_bars=index_bars,
+                benchmark_source=benchmark_source,
+                data_source=fund_data_source,
                 retrieved_at=retrieved_at,
             )
             apply_holdings_route_method(result["valuation"], holdings_route)
@@ -137,43 +149,33 @@ class MarketAnalysisAgent:
             result["valuation"]["holdings_route"] = route_metadata
             result["notes"].insert(0, holdings_route_note(holdings_route))
 
-            index_candidate = None
             if result["valuation"].get("score") is None:
-                if (
-                    holdings_route
-                    and holdings_route.tracking
-                    and holdings_route.tracking.index_code
-                ):
-                    try:
-                        candidates = self.data_client.search_assets(
-                            holdings_route.tracking.index_code,
-                            limit=5,
-                            include_indexes=True,
-                        )
-                    except EastmoneyError:
-                        candidates = []
-                    index_candidate = next(
-                        (
-                            item
-                            for item in candidates
-                            if item.asset_type == "index"
-                            and item.code == holdings_route.tracking.index_code
-                        ),
-                        None,
-                    )
                 if index_candidate is None:
                     index_candidate = self.data_client.find_index_for_fund(fund_name or code)
-            if index_candidate and index_candidate.quote_id:
-                try:
-                    index_bars = self.data_client.get_index_history(
-                        index_candidate.quote_id,
-                        start=start,
-                        end=end,
-                    )
-                except EastmoneyError:
-                    index_bars = []
-                if index_bars:
+                    if index_candidate and index_candidate.quote_id:
+                        try:
+                            index_bars = self.data_client.get_index_history(
+                                index_candidate.quote_id,
+                                start=start,
+                                end=end,
+                            )
+                        except EastmoneyError:
+                            index_bars = []
+                        if index_bars:
+                            benchmark_source = "tracked_index_price_history"
+                index_proxy_sources = {
+                    "tracked_index_price_history",
+                    "sina_index_price_history",
+                }
+                if (
+                    index_candidate
+                    and index_candidate.quote_id
+                    and index_bars
+                    and benchmark_source in index_proxy_sources
+                ):
                     product_data = result["valuation"].get("product_data")
+                    portfolio = result["valuation"].get("portfolio")
+                    holdings_summary = result["valuation"].get("holdings")
                     result["valuation"] = analyze_index_price_proxy(
                         index_bars=index_bars,
                         index_code=index_candidate.code,
@@ -182,7 +184,10 @@ class MarketAnalysisAgent:
                     )
                     result["valuation"]["holdings_route"] = route_metadata
                     result["valuation"]["product_data"] = product_data
-            result["data_source"] = fund_data_source
+                    if portfolio is not None:
+                        result["valuation"]["portfolio"] = portfolio
+                    if holdings_summary is not None:
+                        result["valuation"]["holdings"] = holdings_summary
             if fund_data_source == "exchange_price_history":
                 result["notes"].insert(
                     0,
@@ -199,6 +204,72 @@ class MarketAnalysisAgent:
             )
             return result
         raise ValueError("asset_type must be 'stock' or 'fund'")
+
+    def _load_tracked_index_history(
+        self,
+        route: FundHoldingsRoute | None,
+        *,
+        start: date,
+        end: date,
+    ) -> tuple[AssetSearchResult | None, list[StockBar], str]:
+        index_code = route.tracking.index_code if route and route.tracking else None
+        if not index_code:
+            return None, [], "unavailable"
+        try:
+            candidates = self.data_client.search_assets(
+                index_code,
+                limit=5,
+                include_indexes=True,
+            )
+        except EastmoneyError:
+            candidates = []
+        candidate = next(
+            (
+                item
+                for item in candidates
+                if item.asset_type == "index" and item.code == index_code
+            ),
+            None,
+        )
+        target_etf_code = (
+            route.tracking.target_etf_code if route and route.tracking else None
+        )
+        if target_etf_code:
+            try:
+                target_nav = self.data_client.get_fund_nav(
+                    target_etf_code,
+                    start=start,
+                    end=end,
+                )
+            except EastmoneyError:
+                target_nav = []
+            target_bars = fund_nav_points_as_bars(target_nav)
+            if target_bars:
+                return candidate, target_bars, "target_etf_nav_history"
+
+        if candidate and candidate.quote_id:
+            try:
+                bars = self.data_client.get_sina_index_history(
+                    index_code,
+                    candidate.quote_id,
+                    start=start,
+                    end=end,
+                )
+            except EastmoneyError:
+                bars = []
+            if bars:
+                return candidate, bars, "sina_index_price_history"
+            try:
+                bars = self.data_client.get_index_history(
+                    candidate.quote_id,
+                    start=start,
+                    end=end,
+                )
+            except EastmoneyError:
+                bars = []
+            if bars:
+                return candidate, bars, "tracked_index_price_history"
+        return candidate, [], "unavailable"
 
     def _analyze_fund_holdings(
         self,
@@ -298,6 +369,30 @@ def is_supported_holding_stock(code: str) -> bool:
         return is_a_share_symbol(code)
     except ValueError:
         return False
+
+
+def fund_nav_points_as_bars(points: list[FundNavPoint]) -> list[StockBar]:
+    bars: list[StockBar] = []
+    for point in points:
+        value = point.unit_nav
+        if value is None or value <= 0:
+            continue
+        bars.append(
+            StockBar(
+                date=point.date,
+                open=value,
+                close=value,
+                high=value,
+                low=value,
+                volume=0.0,
+                amount=0.0,
+                amplitude_pct=None,
+                change_pct=point.daily_growth_pct,
+                change_amount=None,
+                turnover_pct=None,
+            )
+        )
+    return bars
 
 
 def serialize_holdings_route(route: FundHoldingsRoute | None) -> dict[str, Any]:

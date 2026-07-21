@@ -7,6 +7,7 @@ from typing import Any
 
 from market_lens.types import (
     FundHolding,
+    FundHoldingsRoute,
     FundNavPoint,
     FundProductInfo,
     StockBar,
@@ -20,6 +21,10 @@ from market_lens.types import (
 )
 from market_lens.valuation.assessment import build_fund_assessment, build_stock_assessment
 from market_lens.valuation.framework import analyze_fund_valuation, analyze_stock_valuation
+from market_lens.valuation.fund_product import (
+    calculate_tracking_metrics,
+    classify_fund_product,
+)
 from market_lens.valuation.metrics import (
     annualized_return,
     format_pct,
@@ -547,6 +552,10 @@ def analyze_fund(
     holding_analyses: dict[str, dict[str, Any]] | None = None,
     product_info: FundProductInfo | None = None,
     product_info_error: str | None = None,
+    holdings_route: FundHoldingsRoute | None = None,
+    benchmark_bars: list[StockBar] | None = None,
+    benchmark_source: str = "tracked_index_price_history",
+    data_source: str | None = None,
     retrieved_at: datetime | None = None,
 ) -> dict[str, Any]:
     latest = nav_points[-1] if nav_points else None
@@ -569,17 +578,31 @@ def analyze_fund(
         holdings=holdings,
         holding_analyses=holding_analyses,
     )
+    routing = classify_fund_product(code, name, product_info, holdings_route)
+    tracking_metrics = calculate_tracking_metrics(
+        nav_points,
+        benchmark_bars or [],
+        profile=routing["profile"],
+        benchmark=product_info.benchmark if product_info else None,
+        benchmark_source=benchmark_source,
+    )
     valuation["product_data"] = summarize_fund_product_data(
         product_info,
         analysis_as_of=latest.date if latest else None,
         retrieved_at=retrieved_at,
         error=product_info_error,
+        routing=routing,
+        tracking_metrics=tracking_metrics,
     )
+    route_metadata = serialize_fund_holdings_route(holdings_route)
+    valuation["holdings_route"] = route_metadata
 
     result = {
         "asset_type": "fund",
         "code": code,
         "name": name,
+        "data_source": data_source,
+        "holdings_route": route_metadata,
         "as_of": latest.date.isoformat() if latest else None,
         "latest_unit_nav": latest.unit_nav if latest else None,
         "latest_cumulative_nav": latest.cumulative_nav if latest else None,
@@ -608,11 +631,32 @@ def analyze_fund(
     return result
 
 
+def serialize_fund_holdings_route(
+    route: FundHoldingsRoute | None,
+) -> dict[str, Any]:
+    tracking = route.tracking if route else None
+    return {
+        "source": route.source if route else "unavailable",
+        "scope": route.scope if route else "unavailable",
+        "as_of": route.as_of.isoformat() if route and route.as_of else None,
+        "coverage": route.coverage if route else 0.0,
+        "fallback_reasons": list(route.fallback_reasons) if route else [],
+        "fund_type": tracking.fund_type if tracking else None,
+        "tracked_index_code": tracking.index_code if tracking else None,
+        "tracked_index_name": tracking.index_name if tracking else None,
+        "target_etf_code": tracking.target_etf_code if tracking else None,
+        "target_etf_name": tracking.target_etf_name if tracking else None,
+    }
+
+
 def summarize_fund_product_data(
     product: FundProductInfo | None,
     analysis_as_of: date | None,
     retrieved_at: datetime,
     error: str | None = None,
+    *,
+    routing: dict[str, Any] | None = None,
+    tracking_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     required_values = {
         "management_fee_pct": product.management_fee_pct if product else None,
@@ -628,8 +672,18 @@ def summarize_fund_product_data(
         stale_after_days=190,
         error=error,
     )
+    scoring_eligible = diagnostic["status"] in {"available", "partial"}
+    total_annual_fee_pct = None
+    if product and product.management_fee_pct is not None and product.custody_fee_pct is not None:
+        total_annual_fee_pct = (
+            product.management_fee_pct
+            + product.custody_fee_pct
+            + (product.sales_service_fee_pct or 0.0)
+        )
     return {
         "diagnostic": diagnostic,
+        "profile": (routing or {}).get("profile"),
+        "routing": routing or {},
         "fund_type": product.fund_type if product else None,
         "establishment_date": (
             product.establishment_date.isoformat()
@@ -641,6 +695,7 @@ def summarize_fund_product_data(
             "management_fee_pct": product.management_fee_pct if product else None,
             "custody_fee_pct": product.custody_fee_pct if product else None,
             "sales_service_fee_pct": product.sales_service_fee_pct if product else None,
+            "total_annual_fee_pct": total_annual_fee_pct,
         },
         "scale": {
             "report_date": (
@@ -653,6 +708,11 @@ def summarize_fund_product_data(
             ),
             "source_field": "ENDNAV",
         },
-        "scoring_eligible": False,
-        "scoring_reason": "read_only_pending_product_model_validation",
+        "tracking": tracking_metrics or {},
+        "scoring_eligible": scoring_eligible,
+        "scoring_reason": (
+            "factor_level_model_rules_apply"
+            if scoring_eligible
+            else f"source_status_{diagnostic['status']}"
+        ),
     }
