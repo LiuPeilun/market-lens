@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime, timedelta
@@ -44,6 +45,7 @@ from market_lens.tools.models import ToolApprovalGrant, ToolContext
 
 mcp_gateway = build_mcp_gateway()
 sandbox_runner = build_sandbox_runner()
+logger = logging.getLogger(__name__)
 
 
 async def maintain_mcp_discovery() -> None:
@@ -57,6 +59,7 @@ async def maintain_mcp_discovery() -> None:
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     del application
+    settings.validate_runtime()
     discovery_task: asyncio.Task[None] | None = None
     if settings.mcp_startup_strict:
         await mcp_gateway.astart()
@@ -270,6 +273,7 @@ def chat(
             name=request.context.name,
         )
     try:
+        expire_stale_tool_approvals(repository, user)
         session = repository.ensure_chat_session(
             user,
             session_id=request.session_id,
@@ -330,6 +334,7 @@ def chat_stream(
         )
 
     try:
+        expire_stale_tool_approvals(repository, user)
         session = repository.ensure_chat_session(
             user,
             session_id=request.session_id,
@@ -437,6 +442,12 @@ def resume_tool_approval(
                 expected_signature=str(approval["signature"]),
                 resolved_at=now,
             )
+            logger.info(
+                "Tool approval expired approval_id=%s user_id=%s tool_name=%s",
+                approval_id,
+                user.id,
+                approval.get("tool_name"),
+            )
             raise HTTPException(status_code=409, detail="Tool approval has expired")
 
         decision_status = "approved" if request.decision == "approve" else "denied"
@@ -452,6 +463,13 @@ def resume_tool_approval(
             raise HTTPException(status_code=409, detail="Tool approval was already resolved")
         if not verify_tool_approval_signature(approval):
             raise HTTPException(status_code=409, detail="Tool approval signature is invalid")
+        logger.info(
+            "Tool approval resolved approval_id=%s user_id=%s tool_name=%s status=%s",
+            approval_id,
+            user.id,
+            approval.get("tool_name"),
+            decision_status,
+        )
         session_id = UUID(str(approval["session_id"]))
         client = get_client()
         analysis_agent = MarketAnalysisAgent(client)
@@ -640,6 +658,13 @@ def save_tool_approval_event(
         signature=signature,
         expires_at=expires_at,
     )
+    logger.info(
+        "Tool approval created approval_id=%s user_id=%s session_id=%s tool_name=%s",
+        row["id"],
+        user.id,
+        session_id,
+        row["tool_name"],
+    )
     return {
         "type": "approval_required",
         "session_id": str(session_id),
@@ -655,6 +680,26 @@ def save_tool_approval_event(
             "expires_at": row["expires_at"],
         },
     }
+
+
+def expire_stale_tool_approvals(
+    repository: SupabaseRepository,
+    user: AuthenticatedUser,
+) -> None:
+    try:
+        expired = repository.expire_stale_tool_approvals(user, datetime.now(UTC))
+    except SupabaseError:
+        logger.warning(
+            "Tool approval cleanup failed user_id=%s",
+            user.id,
+            exc_info=True,
+        )
+        return
+    if expired:
+        logger.info(
+            "Tool approval cleanup completed user_id=%s expired_pending=true",
+            user.id,
+        )
 
 
 def _parse_timestamp(value: Any) -> datetime:

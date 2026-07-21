@@ -176,6 +176,23 @@ def test_repository_creates_and_atomically_transitions_tool_approval() -> None:
     assert payload["status"] == "approved"
 
 
+def test_repository_expires_stale_pending_tool_approvals() -> None:
+    client = FakeRESTClient()
+    repository = SupabaseRepository(client=client)  # type: ignore[arg-type]
+    user = AuthenticatedUser(USER_ID, "user@example.com", "access-token")
+    now = datetime(2026, 7, 21, 1, 0, tzinfo=UTC)
+
+    result = repository.expire_stale_tool_approvals(user, now)
+
+    assert result is True
+    assert len(client.updates) == 1
+    pending = client.updates[0]
+    assert pending[0] == "tool_approvals"
+    assert pending[2]["status"] == "eq.pending"
+    assert pending[2]["expires_at"] == f"lte.{now.isoformat()}"
+    assert pending[3] == {"status": "expired", "resolved_at": now.isoformat()}
+
+
 def test_repository_writes_workspace_file_with_session_path_conflict_key() -> None:
     client = FakeRESTClient()
     repository = SupabaseRepository(client=client)  # type: ignore[arg-type]

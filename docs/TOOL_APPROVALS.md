@@ -26,6 +26,13 @@ MARKET_LENS_TOOL_APPROVAL_TTL_SECONDS=600
 Without an explicit signing key, development uses a random process-local key. Existing approvals
 then become invalid after an API restart, which fails closed.
 
+API startup rejects approval TTL values outside 30-3600 seconds. Environments other than
+`development`, `dev`, and `test` also refuse to start without an explicit signing key. At the start
+of each authenticated chat request, the API expires that user's stale pending approvals and marks
+them resolved. Approved rows are not swept because a tool may still be running after the approval
+deadline; they remain non-replayable and available for audit. Cleanup is best-effort; signature and
+expiration checks remain mandatory when an approval is resumed.
+
 ## Sandboxed Python
 
 `code.run_python` is the first approval-gated execution tool. It accepts Python source and a timeout

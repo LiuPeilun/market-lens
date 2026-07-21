@@ -402,6 +402,25 @@ class SupabaseRepository:
             payload,
         )
 
+    def expire_stale_tool_approvals(
+        self,
+        user: AuthenticatedUser,
+        now: datetime,
+    ) -> bool:
+        timestamp = now.isoformat()
+        pending = self.client.update_where(
+            "tool_approvals",
+            user.access_token,
+            {
+                "user_id": f"eq.{user.id}",
+                "status": "eq.pending",
+                "expires_at": f"lte.{timestamp}",
+                "select": "id,status",
+            },
+            {"status": "expired", "resolved_at": timestamp},
+        )
+        return pending is not None
+
     def list_workspace_files(
         self,
         user: AuthenticatedUser,

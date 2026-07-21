@@ -84,5 +84,19 @@ class Settings:
     def supabase_configured(self) -> bool:
         return bool(self.supabase_url and self.supabase_publishable_key)
 
+    def validate_runtime(self) -> None:
+        environment = self.env.strip().lower()
+        if not 30 <= self.tool_approval_ttl_seconds <= 3600:
+            raise ValueError(
+                "MARKET_LENS_TOOL_APPROVAL_TTL_SECONDS must be between 30 and 3600"
+            )
+        if (
+            environment not in {"development", "dev", "test"}
+            and not self.tool_approval_signing_key_configured
+        ):
+            raise ValueError(
+                "MARKET_LENS_TOOL_APPROVAL_SIGNING_KEY is required outside development"
+            )
+
 
 settings = Settings()
