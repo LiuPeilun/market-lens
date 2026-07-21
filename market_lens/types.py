@@ -77,12 +77,35 @@ class StockProfile:
 class StockFinancialIndicator:
     date: date
     report_type: str | None
+    notice_date: date | None
+    source_updated_at: date | None
+    org_type: str | None
     roe_weighted: float | None
     roe_deducted_weighted: float | None
     parent_netprofit_growth_pct: float | None
     revenue_growth_pct: float | None
     gross_margin_pct: float | None
     net_margin_pct: float | None
+    roic_pct: float | None
+    fcff_backward_cny: float | None
+    fcff_forward_cny: float | None
+    net_interest_margin_pct: float | None
+    net_interest_spread_pct: float | None
+    non_performing_loan_ratio_pct: float | None
+    provision_coverage_ratio_pct: float | None
+    capital_adequacy_ratio_pct: float | None
+    tier1_capital_adequacy_ratio_pct: float | None
+    core_tier1_capital_adequacy_ratio_pct: float | None
+    solvency_adequacy_ratio_pct: float | None
+    new_business_value_cny: float | None
+    new_business_value_margin_pct: float | None
+    surrender_rate_pct: float | None
+    risk_coverage_ratio_pct: float | None
+    liquidity_coverage_ratio_pct: float | None
+    net_stable_funding_ratio_pct: float | None
+    net_capital_to_net_assets_pct: float | None
+    net_capital_cny: float | None
+    net_assets_cny: float | None
     raw: dict[str, Any]
 
 
@@ -137,6 +160,21 @@ class FundTrackingInfo:
     index_name: str | None
     target_etf_code: str | None
     target_etf_name: str | None
+
+
+@dataclass(frozen=True)
+class FundProductInfo:
+    fund_code: str
+    fund_name: str | None
+    fund_type: str | None
+    establishment_date: date | None
+    scale_report_date: date | None
+    period_end_net_assets_cny: float | None
+    management_fee_pct: float | None
+    custody_fee_pct: float | None
+    sales_service_fee_pct: float | None
+    benchmark: str | None
+    raw: dict[str, Any]
 
 
 @dataclass(frozen=True)

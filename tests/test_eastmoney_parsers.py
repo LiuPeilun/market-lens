@@ -20,6 +20,7 @@ from market_lens.data.eastmoney import (
     parse_fund_nav_row,
     parse_fund_nav_table,
     parse_fund_position_payload,
+    parse_fund_product_info,
     parse_fund_tracking_info,
     parse_pingzhongdata_fund_name,
     parse_stock_dividend_plan,
@@ -165,18 +166,67 @@ def test_parse_stock_financial_indicator() -> None:
         {
             "REPORT_DATE": "2025-12-31 00:00:00",
             "REPORT_TYPE": "annual",
+            "NOTICE_DATE": "2026-04-17 00:00:00",
+            "UPDATE_DATE": "2026-04-18 00:00:00",
+            "ORG_TYPE": "通用",
             "ROEJQ": "32.53",
             "ROEKCJQ": "32.52",
             "PARENTNETPROFITTZ": "-4.53",
             "TOTALOPERATEREVETZ": "-1.21",
             "XSMLL": "91.18",
             "XSJLL": "50.53",
+            "ROIC": "31.42",
+            "FCFF_BACK": "76139290546.69",
+            "FCFF_FORWARD": "68581654498.07",
         }
     )
 
     assert row.date.isoformat() == "2025-12-31"
     assert row.roe_weighted == 32.53
     assert row.parent_netprofit_growth_pct == -4.53
+    assert row.org_type == "通用"
+    assert row.notice_date == date(2026, 4, 17)
+    assert row.roic_pct == 31.42
+    assert row.fcff_backward_cny == 76139290546.69
+
+
+def test_parse_stock_financial_industry_fields() -> None:
+    bank = parse_stock_financial_indicator(
+        {
+            "REPORT_DATE": "2025-12-31",
+            "ORG_TYPE": "银行",
+            "NET_INTEREST_MARGIN": "1.87",
+            "NONPERLOAN": "0.94",
+            "BLDKBBL": "391.79",
+            "NEWCAPITALADER": "18.24",
+        }
+    )
+    insurance = parse_stock_financial_indicator(
+        {
+            "REPORT_DATE": "2025-12-31",
+            "ORG_TYPE": "保险",
+            "SOLVENCY_AR": "193.3",
+            "NBV_LIFE": "36897000000",
+            "NBV_RATE": "28.5",
+        }
+    )
+    securities = parse_stock_financial_indicator(
+        {
+            "REPORT_DATE": "2025-12-31",
+            "ORG_TYPE": "证券",
+            "RISK_COVERAGE": "210.46",
+            "LIQUIDITY_COVERAGE_RATIO": "137.8",
+            "NET_FUNDING_RATIO": "125.27",
+            "JZBJZC": "61.26",
+        }
+    )
+
+    assert bank.net_interest_margin_pct == 1.87
+    assert bank.provision_coverage_ratio_pct == 391.79
+    assert insurance.solvency_adequacy_ratio_pct == 193.3
+    assert insurance.new_business_value_cny == 36897000000.0
+    assert securities.risk_coverage_ratio_pct == 210.46
+    assert securities.net_capital_to_net_assets_pct == 61.26
 
 
 def test_parse_stock_peer_comparison() -> None:
@@ -279,6 +329,33 @@ def test_parse_fund_tracking_and_target_etf() -> None:
     assert position["target_etf_code"] == "159326"
     assert position["holdings"][0].weight_pct == 0.25
     assert position["report_date"].isoformat() == "2026-06-30"
+
+
+def test_parse_fund_product_info() -> None:
+    product = parse_fund_product_info(
+        {
+            "Datas": {
+                "FCODE": "510300",
+                "SHORTNAME": "沪深300ETF华泰柏瑞",
+                "FTYPE": "指数型-股票",
+                "ESTABDATE": "2012-05-04",
+                "FEGMRQ": "2026-06-30",
+                "ENDNAV": "94872183996.4",
+                "MGREXP": "0.15%",
+                "TRUSTEXP": "0.05%",
+                "SALESEXP": "--",
+                "PERFCMP": "沪深300指数",
+            },
+            "ErrCode": 0,
+        }
+    )
+
+    assert product.fund_code == "510300"
+    assert product.scale_report_date == date(2026, 6, 30)
+    assert product.period_end_net_assets_cny == 94872183996.4
+    assert product.management_fee_pct == 0.15
+    assert product.custody_fee_pct == 0.05
+    assert product.sales_service_fee_pct is None
 
 
 def test_parse_csi_index_top_holdings() -> None:

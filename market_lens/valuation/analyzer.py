@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from math import isfinite
 from typing import Any
 
 from market_lens.types import (
     FundHolding,
     FundNavPoint,
+    FundProductInfo,
     StockBar,
     StockDividendPlan,
     StockDividendSummary,
@@ -39,6 +40,8 @@ def analyze_stock(
     dividends: dict[str, list[StockDividendPlan] | list[StockDividendSummary]] | None = None,
     industry_valuation: StockIndustryValuationSnapshot | None = None,
     industry_valuation_error: str | None = None,
+    financials_error: str | None = None,
+    retrieved_at: datetime | None = None,
 ) -> dict[str, Any]:
     latest_bar = bars[-1] if bars else None
     latest_valuation = valuations[-1] if valuations else None
@@ -46,6 +49,7 @@ def analyze_stock(
     peers = peers or {}
     dividends = dividends or {}
     latest_financial = financials[-1] if financials else None
+    retrieved_at = retrieved_at or datetime.now(UTC)
 
     pe_percentile = percentile_rank(
         [item.pe_ttm for item in valuations],
@@ -94,6 +98,12 @@ def analyze_stock(
         "gross_margin_pct": latest_financial.gross_margin_pct if latest_financial else None,
         "net_margin_pct": latest_financial.net_margin_pct if latest_financial else None,
     }
+    factor_data = summarize_financial_factor_data(
+        financials,
+        analysis_as_of=latest_bar.date if latest_bar else None,
+        retrieved_at=retrieved_at,
+        error=financials_error,
+    )
     industry_summary = {
         "em_industry": profile.em_industry if profile else None,
         "csrc_industry": profile.csrc_industry if profile else None,
@@ -116,6 +126,7 @@ def analyze_stock(
             "pb_label": valuation_label(pb_percentile),
             "industry": industry_summary,
             "fundamentals": fundamental_summary,
+            "factor_data": factor_data,
             "peer_comparison": peer_summary,
             "industry_valuation": industry_valuation_summary,
             "dividend": dividend_summary,
@@ -324,14 +335,202 @@ def serialize_dividend_plan(plan: StockDividendPlan) -> dict[str, Any]:
     }
 
 
+FINANCIAL_COMMON_FIELDS = {
+    "roe_weighted_pct": "roe_weighted",
+    "roe_deducted_weighted_pct": "roe_deducted_weighted",
+    "parent_net_profit_growth_pct": "parent_netprofit_growth_pct",
+    "revenue_growth_pct": "revenue_growth_pct",
+    "gross_margin_pct": "gross_margin_pct",
+    "net_margin_pct": "net_margin_pct",
+}
+FINANCIAL_SCOPE_FIELDS = {
+    "general_non_financial": {
+        "roic_pct": "roic_pct",
+        "fcff_backward_cny": "fcff_backward_cny",
+        "fcff_forward_cny": "fcff_forward_cny",
+    },
+    "bank": {
+        "net_interest_margin_pct": "net_interest_margin_pct",
+        "net_interest_spread_pct": "net_interest_spread_pct",
+        "non_performing_loan_ratio_pct": "non_performing_loan_ratio_pct",
+        "provision_coverage_ratio_pct": "provision_coverage_ratio_pct",
+        "capital_adequacy_ratio_pct": "capital_adequacy_ratio_pct",
+        "tier1_capital_adequacy_ratio_pct": "tier1_capital_adequacy_ratio_pct",
+        "core_tier1_capital_adequacy_ratio_pct": "core_tier1_capital_adequacy_ratio_pct",
+    },
+    "insurance": {
+        "solvency_adequacy_ratio_pct": "solvency_adequacy_ratio_pct",
+        "new_business_value_cny": "new_business_value_cny",
+        "new_business_value_margin_pct": "new_business_value_margin_pct",
+    },
+    "securities": {
+        "risk_coverage_ratio_pct": "risk_coverage_ratio_pct",
+        "liquidity_coverage_ratio_pct": "liquidity_coverage_ratio_pct",
+        "net_stable_funding_ratio_pct": "net_stable_funding_ratio_pct",
+        "net_capital_to_net_assets_pct": "net_capital_to_net_assets_pct",
+    },
+}
+
+
+def summarize_financial_factor_data(
+    financials: list[StockFinancialIndicator],
+    analysis_as_of: date | None,
+    retrieved_at: datetime,
+    error: str | None = None,
+) -> dict[str, Any]:
+    usable_rows = [
+        item
+        for item in financials
+        if analysis_as_of is None
+        or (
+            item.date <= analysis_as_of
+            and (item.notice_date is None or item.notice_date <= analysis_as_of)
+        )
+    ]
+    excluded_future_rows = len(financials) - len(usable_rows)
+    latest = usable_rows[-1] if usable_rows else None
+    scope = financial_model_scope(latest.org_type if latest else None)
+    scope_fields = FINANCIAL_SCOPE_FIELDS.get(scope, {})
+    required_values = serialize_financial_fields(latest, scope_fields)
+    extra_reasons: list[str] = []
+    if excluded_future_rows:
+        extra_reasons.append(f"future_dated_rows_excluded:{excluded_future_rows}")
+    if latest and latest.notice_date is None:
+        extra_reasons.append("publication_date_unavailable")
+    if latest and scope == "unknown":
+        extra_reasons.append("unsupported_financial_org_type")
+
+    diagnostic = build_source_diagnostic(
+        source="eastmoney_f10_key_financial_indicators",
+        analysis_as_of=analysis_as_of,
+        source_as_of=latest.date if latest else None,
+        retrieved_at=retrieved_at,
+        required_values=required_values,
+        stale_after_days=550,
+        error=error,
+        extra_reasons=extra_reasons,
+    )
+    return {
+        "model_scope": scope,
+        "org_type": latest.org_type if latest else None,
+        "diagnostic": diagnostic,
+        "latest": {
+            "report_date": latest.date.isoformat() if latest else None,
+            "report_type": latest.report_type if latest else None,
+            "notice_date": (
+                latest.notice_date.isoformat() if latest and latest.notice_date else None
+            ),
+            "source_updated_at": (
+                latest.source_updated_at.isoformat()
+                if latest and latest.source_updated_at
+                else None
+            ),
+            "common": serialize_financial_fields(latest, FINANCIAL_COMMON_FIELDS),
+            "industry_specific": required_values,
+        },
+        "history": [
+            {
+                "report_date": item.date.isoformat(),
+                "report_type": item.report_type,
+                "notice_date": item.notice_date.isoformat() if item.notice_date else None,
+                "values": serialize_financial_fields(item, scope_fields),
+            }
+            for item in usable_rows
+        ],
+        "scoring_eligible": False,
+        "scoring_reason": "read_only_pending_model_validation",
+        "fcff_semantics": (
+            "Eastmoney annual FCFF_BACK and FCFF_FORWARD source fields; "
+            "not treated as TTM and not converted to free-cash-flow yield."
+            if scope == "general_non_financial"
+            else None
+        ),
+    }
+
+
+def financial_model_scope(org_type: str | None) -> str:
+    normalized = (org_type or "").strip()
+    return {
+        "通用": "general_non_financial",
+        "银行": "bank",
+        "保险": "insurance",
+        "证券": "securities",
+    }.get(normalized, "unknown")
+
+
+def serialize_financial_fields(
+    row: StockFinancialIndicator | None,
+    fields: dict[str, str],
+) -> dict[str, float | None]:
+    return {
+        output_name: getattr(row, attribute, None) if row else None
+        for output_name, attribute in fields.items()
+    }
+
+
+def build_source_diagnostic(
+    *,
+    source: str,
+    analysis_as_of: date | None,
+    source_as_of: date | None,
+    retrieved_at: datetime,
+    required_values: dict[str, Any],
+    stale_after_days: int,
+    error: str | None = None,
+    extra_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    reasons = list(extra_reasons or [])
+    missing_fields = [key for key, value in required_values.items() if value is None]
+    age_days = (
+        (analysis_as_of - source_as_of).days
+        if analysis_as_of is not None and source_as_of is not None
+        else None
+    )
+
+    if error:
+        status = "error"
+        reasons.append(f"source_error:{error}")
+    elif source_as_of is None:
+        status = "unavailable"
+        reasons.append("source_data_unavailable")
+    elif age_days is not None and age_days < 0:
+        status = "invalid"
+        reasons.append("source_date_after_analysis_date")
+    elif age_days is not None and age_days > stale_after_days:
+        status = "stale"
+        reasons.append(f"source_stale:{age_days}_days")
+    elif missing_fields:
+        status = "partial"
+    else:
+        status = "available"
+
+    if missing_fields:
+        reasons.append("missing_fields:" + ",".join(missing_fields))
+    return {
+        "status": status,
+        "source": source,
+        "analysis_as_of": analysis_as_of.isoformat() if analysis_as_of else None,
+        "source_as_of": source_as_of.isoformat() if source_as_of else None,
+        "retrieved_at": retrieved_at.astimezone(UTC).isoformat(),
+        "age_days": age_days,
+        "stale_after_days": stale_after_days,
+        "missing_fields": missing_fields,
+        "degradation_reasons": reasons,
+    }
+
+
 def analyze_fund(
     code: str,
     nav_points: list[FundNavPoint],
     name: str | None = None,
     holdings: list[FundHolding] | None = None,
     holding_analyses: dict[str, dict[str, Any]] | None = None,
+    product_info: FundProductInfo | None = None,
+    product_info_error: str | None = None,
+    retrieved_at: datetime | None = None,
 ) -> dict[str, Any]:
     latest = nav_points[-1] if nav_points else None
+    retrieved_at = retrieved_at or datetime.now(UTC)
     nav_values = [item.unit_nav for item in nav_points]
     total_return = None
     annualized = None
@@ -343,6 +542,19 @@ def analyze_fund(
             nav_points[0].date,
             nav_points[-1].date,
         )
+
+    valuation = analyze_fund_valuation(
+        nav_points,
+        name=name,
+        holdings=holdings,
+        holding_analyses=holding_analyses,
+    )
+    valuation["product_data"] = summarize_fund_product_data(
+        product_info,
+        analysis_as_of=latest.date if latest else None,
+        retrieved_at=retrieved_at,
+        error=product_info_error,
+    )
 
     return {
         "asset_type": "fund",
@@ -360,12 +572,7 @@ def analyze_fund(
             "annualized_return_text": format_pct(annualized),
             "max_drawdown_text": format_pct(max_drawdown(nav_values)),
         },
-        "valuation": analyze_fund_valuation(
-            nav_points,
-            name=name,
-            holdings=holdings,
-            holding_analyses=holding_analyses,
-        ),
+        "valuation": valuation,
         "notes": [
             "Fund NAV performance is not the same as holding-level valuation.",
             (
@@ -376,4 +583,54 @@ def analyze_fund(
             "Low top-holdings coverage or an old report date lowers confidence.",
             "This is a research summary, not investment advice.",
         ],
+    }
+
+
+def summarize_fund_product_data(
+    product: FundProductInfo | None,
+    analysis_as_of: date | None,
+    retrieved_at: datetime,
+    error: str | None = None,
+) -> dict[str, Any]:
+    required_values = {
+        "management_fee_pct": product.management_fee_pct if product else None,
+        "custody_fee_pct": product.custody_fee_pct if product else None,
+        "period_end_net_assets_cny": product.period_end_net_assets_cny if product else None,
+    }
+    diagnostic = build_source_diagnostic(
+        source="eastmoney_fund_mobile_detail",
+        analysis_as_of=analysis_as_of,
+        source_as_of=product.scale_report_date if product else None,
+        retrieved_at=retrieved_at,
+        required_values=required_values,
+        stale_after_days=190,
+        error=error,
+    )
+    return {
+        "diagnostic": diagnostic,
+        "fund_type": product.fund_type if product else None,
+        "establishment_date": (
+            product.establishment_date.isoformat()
+            if product and product.establishment_date
+            else None
+        ),
+        "benchmark": product.benchmark if product else None,
+        "fees": {
+            "management_fee_pct": product.management_fee_pct if product else None,
+            "custody_fee_pct": product.custody_fee_pct if product else None,
+            "sales_service_fee_pct": product.sales_service_fee_pct if product else None,
+        },
+        "scale": {
+            "report_date": (
+                product.scale_report_date.isoformat()
+                if product and product.scale_report_date
+                else None
+            ),
+            "period_end_net_assets_cny": (
+                product.period_end_net_assets_cny if product else None
+            ),
+            "source_field": "ENDNAV",
+        },
+        "scoring_eligible": False,
+        "scoring_reason": "read_only_pending_product_model_validation",
     }

@@ -187,12 +187,14 @@ def compact_analysis_for_llm(analysis: dict[str, Any]) -> dict[str, Any]:
             "confidence_label": valuation.get("confidence_label"),
             "industry": valuation.get("industry"),
             "fundamentals": valuation.get("fundamentals"),
+            "factor_data": compact_factor_data(valuation.get("factor_data")),
             "peer_comparison": valuation.get("peer_comparison"),
             "industry_valuation": valuation.get("industry_valuation"),
             "dividend": valuation.get("dividend"),
             "index": valuation.get("index"),
             "portfolio": valuation.get("portfolio"),
             "holdings": valuation.get("holdings"),
+            "product_data": valuation.get("product_data"),
             "missing_factors": valuation.get("missing_factors"),
             "required_future_data": valuation.get("required_future_data"),
         },
@@ -203,6 +205,20 @@ def compact_analysis_for_llm(analysis: dict[str, Any]) -> dict[str, Any]:
             "max_drawdown_text": performance.get("max_drawdown_text"),
         },
         "notes": analysis.get("notes", []),
+    }
+
+
+def compact_factor_data(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {
+        "model_scope": value.get("model_scope"),
+        "org_type": value.get("org_type"),
+        "diagnostic": value.get("diagnostic"),
+        "latest": value.get("latest"),
+        "scoring_eligible": value.get("scoring_eligible"),
+        "scoring_reason": value.get("scoring_reason"),
+        "fcff_semantics": value.get("fcff_semantics"),
     }
 
 

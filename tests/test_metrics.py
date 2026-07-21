@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
+from market_lens.data.eastmoney import parse_stock_financial_indicator
 from market_lens.types import (
     FundHolding,
     FundNavPoint,
+    FundProductInfo,
     StockBar,
     StockIndustryValuationSnapshot,
     StockValuationPoint,
 )
-from market_lens.valuation.analyzer import summarize_industry_valuation
+from market_lens.valuation.analyzer import (
+    summarize_financial_factor_data,
+    summarize_fund_product_data,
+    summarize_industry_valuation,
+)
 from market_lens.valuation.framework import (
     analyze_fund_valuation,
     analyze_index_price_proxy,
@@ -170,6 +176,159 @@ def test_summarize_industry_valuation_marks_small_sample_ineligible() -> None:
     assert result["metrics"]["pe_ttm"]["percentile"] is None
     assert result["metrics"]["pe_ttm"]["eligible"] is False
     assert result["metrics"]["pe_ttm"]["reason"] == "insufficient_industry_sample"
+
+
+def test_financial_factor_diagnostics_cover_all_model_scopes_and_states() -> None:
+    retrieved_at = datetime(2026, 7, 21, 8, 0, tzinfo=UTC)
+    analysis_as_of = date(2026, 7, 20)
+    scope_rows = {
+        "general_non_financial": {
+            "ORG_TYPE": "通用",
+            "ROIC": 12.5,
+            "FCFF_BACK": 100.0,
+            "FCFF_FORWARD": 90.0,
+        },
+        "bank": {
+            "ORG_TYPE": "银行",
+            "NET_INTEREST_MARGIN": 1.8,
+            "NET_INTEREST_SPREAD": 1.7,
+            "NONPERLOAN": 0.9,
+            "BLDKBBL": 390.0,
+            "NEWCAPITALADER": 18.0,
+            "FIRST_ADEQUACY_RATIO": 16.0,
+            "HXYJBCZL": 14.0,
+        },
+        "insurance": {
+            "ORG_TYPE": "保险",
+            "SOLVENCY_AR": 190.0,
+            "NBV_LIFE": 36_000_000_000,
+            "NBV_RATE": 28.0,
+        },
+        "securities": {
+            "ORG_TYPE": "证券",
+            "RISK_COVERAGE": 210.0,
+            "LIQUIDITY_COVERAGE_RATIO": 138.0,
+            "NET_FUNDING_RATIO": 125.0,
+            "JZBJZC": 61.0,
+        },
+    }
+
+    for expected_scope, values in scope_rows.items():
+        complete = parse_stock_financial_indicator(
+            {
+                "REPORT_DATE": "2025-12-31",
+                "REPORT_TYPE": "年报",
+                "NOTICE_DATE": "2026-03-31",
+                **values,
+            }
+        )
+        available = summarize_financial_factor_data(
+            [complete], analysis_as_of, retrieved_at
+        )
+        assert available["model_scope"] == expected_scope
+        assert available["diagnostic"]["status"] == "available"
+        assert available["scoring_eligible"] is False
+
+        empty = parse_stock_financial_indicator(
+            {
+                "REPORT_DATE": "2025-12-31",
+                "NOTICE_DATE": "2026-03-31",
+                "ORG_TYPE": values["ORG_TYPE"],
+            }
+        )
+        partial = summarize_financial_factor_data([empty], analysis_as_of, retrieved_at)
+        assert partial["model_scope"] == expected_scope
+        assert partial["diagnostic"]["status"] == "partial"
+        assert partial["diagnostic"]["missing_fields"]
+
+        stale = parse_stock_financial_indicator(
+            {
+                "REPORT_DATE": "2024-01-01",
+                "NOTICE_DATE": "2024-03-31",
+                **values,
+            }
+        )
+        stale_result = summarize_financial_factor_data(
+            [stale], analysis_as_of, retrieved_at
+        )
+        assert stale_result["diagnostic"]["status"] == "stale"
+
+        error_result = summarize_financial_factor_data(
+            [complete], analysis_as_of, retrieved_at, error="upstream unavailable"
+        )
+        assert error_result["model_scope"] == expected_scope
+        assert error_result["diagnostic"]["status"] == "error"
+
+
+def test_financial_factor_diagnostics_exclude_future_publications() -> None:
+    future = parse_stock_financial_indicator(
+        {
+            "REPORT_DATE": "2025-12-31",
+            "NOTICE_DATE": "2026-04-30",
+            "ORG_TYPE": "通用",
+            "ROIC": 12.5,
+            "FCFF_BACK": 100.0,
+            "FCFF_FORWARD": 90.0,
+        }
+    )
+
+    result = summarize_financial_factor_data(
+        [future],
+        analysis_as_of=date(2026, 3, 31),
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    assert result["diagnostic"]["status"] == "unavailable"
+    assert "future_dated_rows_excluded:1" in result["diagnostic"]["degradation_reasons"]
+
+
+def test_fund_product_diagnostics_cover_available_partial_stale_and_error() -> None:
+    retrieved_at = datetime(2026, 7, 21, tzinfo=UTC)
+    analysis_as_of = date(2026, 7, 20)
+    available_product = FundProductInfo(
+        fund_code="510300",
+        fund_name="沪深300ETF华泰柏瑞",
+        fund_type="指数型-股票",
+        establishment_date=date(2012, 5, 4),
+        scale_report_date=date(2026, 6, 30),
+        period_end_net_assets_cny=94_872_183_996.4,
+        management_fee_pct=0.15,
+        custody_fee_pct=0.05,
+        sales_service_fee_pct=None,
+        benchmark="沪深300指数",
+        raw={},
+    )
+    partial_product = FundProductInfo(
+        **{
+            **available_product.__dict__,
+            "management_fee_pct": None,
+        }
+    )
+    stale_product = FundProductInfo(
+        **{
+            **available_product.__dict__,
+            "scale_report_date": date(2025, 6, 30),
+        }
+    )
+
+    available = summarize_fund_product_data(
+        available_product, analysis_as_of, retrieved_at
+    )
+    partial = summarize_fund_product_data(partial_product, analysis_as_of, retrieved_at)
+    stale = summarize_fund_product_data(stale_product, analysis_as_of, retrieved_at)
+    error = summarize_fund_product_data(
+        available_product,
+        analysis_as_of,
+        retrieved_at,
+        error="upstream unavailable",
+    )
+
+    assert available["diagnostic"]["status"] == "available"
+    assert available["scale"]["source_field"] == "ENDNAV"
+    assert available["scoring_eligible"] is False
+    assert partial["diagnostic"]["status"] == "partial"
+    assert stale["diagnostic"]["status"] == "stale"
+    assert error["diagnostic"]["status"] == "error"
 
 
 def test_analyze_fund_valuation_framework_marks_pending_inputs() -> None:

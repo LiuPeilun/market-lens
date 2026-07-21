@@ -21,6 +21,7 @@ from market_lens.types import (
     FundHolding,
     FundHoldingsRoute,
     FundNavPoint,
+    FundProductInfo,
     FundTrackingInfo,
     StockBar,
     StockDividendPlan,
@@ -323,24 +324,8 @@ class EastmoneyClient:
 
     def get_fund_tracking_info(self, code: str) -> FundTrackingInfo:
         normalized_code = normalize_fund_code(code)
-        params = {
-            "FCODE": normalized_code,
-            "deviceid": "1234567890",
-            "plat": "Android",
-            "product": "EFund",
-            "version": "6.6.8",
-        }
-        detail_url = (
-            "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNDetailInformation?"
-            + urlencode(params)
-        )
-        detail = parse_fund_tracking_info(
-            self._get_validated_json(
-                detail_url,
-                ttl_seconds=24 * 60 * 60,
-                is_success=lambda payload: payload.get("ErrCode") == 0,
-            )
-        )
+        params = fund_mobile_params(normalized_code)
+        detail = parse_fund_tracking_info(self._get_fund_detail_payload(normalized_code))
         if not detail.index_code:
             return detail
 
@@ -362,6 +347,21 @@ class EastmoneyClient:
             detail,
             target_etf_code=position["target_etf_code"],
             target_etf_name=position["target_etf_name"],
+        )
+
+    def get_fund_product_info(self, code: str) -> FundProductInfo:
+        normalized_code = normalize_fund_code(code)
+        return parse_fund_product_info(self._get_fund_detail_payload(normalized_code))
+
+    def _get_fund_detail_payload(self, normalized_code: str) -> dict[str, Any]:
+        detail_url = (
+            "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNDetailInformation?"
+            + urlencode(fund_mobile_params(normalized_code))
+        )
+        return self._get_validated_json(
+            detail_url,
+            ttl_seconds=24 * 60 * 60,
+            is_success=lambda payload: payload.get("ErrCode") == 0,
         )
 
     def get_csi_index_top_holdings(
@@ -781,6 +781,16 @@ def normalize_fund_code(code: str) -> str:
     return digits
 
 
+def fund_mobile_params(code: str) -> dict[str, str]:
+    return {
+        "FCODE": normalize_fund_code(code),
+        "deviceid": "1234567890",
+        "plat": "Android",
+        "product": "EFund",
+        "version": "6.6.8",
+    }
+
+
 def infer_secid(symbol: str) -> str:
     code = normalize_symbol(symbol)
     if not is_a_share_symbol(code):
@@ -934,12 +944,35 @@ def parse_stock_financial_indicator(row: dict[str, Any]) -> StockFinancialIndica
     return StockFinancialIndicator(
         date=parse_date(str(row["REPORT_DATE"])),
         report_type=repair_mojibake(row.get("REPORT_TYPE")),
+        notice_date=parse_optional_date(row.get("NOTICE_DATE")),
+        source_updated_at=parse_optional_date(row.get("UPDATE_DATE")),
+        org_type=repair_mojibake(row.get("ORG_TYPE")),
         roe_weighted=to_float(row.get("ROEJQ")),
         roe_deducted_weighted=to_float(row.get("ROEKCJQ")),
         parent_netprofit_growth_pct=to_float(row.get("PARENTNETPROFITTZ")),
         revenue_growth_pct=to_float(row.get("TOTALOPERATEREVETZ")),
         gross_margin_pct=to_float(row.get("XSMLL")),
         net_margin_pct=to_float(row.get("XSJLL")),
+        roic_pct=to_float(row.get("ROIC")),
+        fcff_backward_cny=to_float(row.get("FCFF_BACK")),
+        fcff_forward_cny=to_float(row.get("FCFF_FORWARD")),
+        net_interest_margin_pct=to_float(row.get("NET_INTEREST_MARGIN")),
+        net_interest_spread_pct=to_float(row.get("NET_INTEREST_SPREAD")),
+        non_performing_loan_ratio_pct=to_float(row.get("NONPERLOAN")),
+        provision_coverage_ratio_pct=to_float(row.get("BLDKBBL")),
+        capital_adequacy_ratio_pct=to_float(row.get("NEWCAPITALADER")),
+        tier1_capital_adequacy_ratio_pct=to_float(row.get("FIRST_ADEQUACY_RATIO")),
+        core_tier1_capital_adequacy_ratio_pct=to_float(row.get("HXYJBCZL")),
+        solvency_adequacy_ratio_pct=to_float(row.get("SOLVENCY_AR")),
+        new_business_value_cny=to_float(row.get("NBV_LIFE")),
+        new_business_value_margin_pct=to_float(row.get("NBV_RATE")),
+        surrender_rate_pct=to_float(row.get("SURRENDER_RATE_LIFE")),
+        risk_coverage_ratio_pct=to_float(row.get("RISK_COVERAGE")),
+        liquidity_coverage_ratio_pct=to_float(row.get("LIQUIDITY_COVERAGE_RATIO")),
+        net_stable_funding_ratio_pct=to_float(row.get("NET_FUNDING_RATIO")),
+        net_capital_to_net_assets_pct=to_float(row.get("JZBJZC")),
+        net_capital_cny=to_float(row.get("JZB")),
+        net_assets_cny=to_float(row.get("JZC")),
         raw=row,
     )
 
@@ -1150,6 +1183,38 @@ def parse_fund_tracking_info(payload: dict[str, Any]) -> FundTrackingInfo:
         target_etf_code=None,
         target_etf_name=None,
     )
+
+
+def parse_fund_product_info(payload: dict[str, Any]) -> FundProductInfo:
+    if payload.get("ErrCode") != 0 or not isinstance(payload.get("Datas"), dict):
+        message = payload.get("ErrMsg") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve fund product information: {message}")
+    data = payload["Datas"]
+    fund_code = re.sub(r"\D", "", str(data.get("FCODE") or ""))
+    if len(fund_code) != 6:
+        raise EastmoneyError("Failed to resolve fund product information: invalid fund code")
+    return FundProductInfo(
+        fund_code=fund_code,
+        fund_name=repair_mojibake(data.get("SHORTNAME")),
+        fund_type=repair_mojibake(data.get("FTYPE")),
+        establishment_date=parse_optional_date(data.get("ESTABDATE")),
+        scale_report_date=parse_optional_date(data.get("FEGMRQ")),
+        period_end_net_assets_cny=to_float(data.get("ENDNAV")),
+        management_fee_pct=parse_percent_value(data.get("MGREXP")),
+        custody_fee_pct=parse_percent_value(data.get("TRUSTEXP")),
+        sales_service_fee_pct=parse_percent_value(data.get("SALESEXP")),
+        benchmark=repair_mojibake(data.get("PERFCMP") or data.get("BENCH")),
+        raw=data,
+    )
+
+
+def parse_percent_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text == "--":
+        return None
+    return to_float(text.removesuffix("%"))
 
 
 def parse_fund_position_payload(payload: dict[str, Any]) -> dict[str, Any]:

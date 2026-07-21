@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from market_lens.agent.llm_client import LLMError, OpenAICompatibleLLMClient
+from market_lens.agent.llm_client import (
+    LLMError,
+    OpenAICompatibleLLMClient,
+    compact_analysis_for_llm,
+)
 
 
 class FakeResponse:
@@ -117,3 +121,28 @@ def test_stream_complete_parses_sse_bytes(monkeypatch) -> None:
 
     assert chunks == ["STREAM", "_OK"]
     assert captured["stream"] is True
+
+
+def test_compact_analysis_keeps_factor_diagnostics_without_history() -> None:
+    compact = compact_analysis_for_llm(
+        {
+            "asset_type": "stock",
+            "code": "600519",
+            "valuation": {
+                "factor_data": {
+                    "model_scope": "general_non_financial",
+                    "diagnostic": {"status": "available"},
+                    "latest": {"industry_specific": {"roic_pct": 31.42}},
+                    "history": [{"report_date": "2025-12-31"}],
+                    "scoring_eligible": False,
+                },
+                "product_data": {"diagnostic": {"status": "unavailable"}},
+            },
+        }
+    )
+
+    factor_data = compact["valuation"]["factor_data"]
+    assert factor_data["model_scope"] == "general_non_financial"
+    assert factor_data["latest"]["industry_specific"]["roic_pct"] == 31.42
+    assert "history" not in factor_data
+    assert compact["valuation"]["product_data"]["diagnostic"]["status"] == "unavailable"

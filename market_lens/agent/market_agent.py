@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from market_lens.data.eastmoney import (
@@ -33,6 +33,7 @@ class MarketAnalysisAgent:
         start: date,
         end: date,
     ) -> dict[str, Any]:
+        retrieved_at = datetime.now(UTC)
         if asset_type == "stock":
             all_valuations = self.data_client.get_stock_valuation(code)
             stock_name = next((item.name for item in reversed(all_valuations) if item.name), None)
@@ -48,6 +49,7 @@ class MarketAnalysisAgent:
                 )
             profile = None
             financials = []
+            financials_error = None
             peers = {}
             dividends = {}
             try:
@@ -55,9 +57,13 @@ class MarketAnalysisAgent:
             except EastmoneyError:
                 pass
             try:
-                financials = self.data_client.get_stock_financial_indicators(code)
-            except EastmoneyError:
-                pass
+                financials = [
+                    item
+                    for item in self.data_client.get_stock_financial_indicators(code)
+                    if item.date <= end
+                ]
+            except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
+                financials_error = str(exc)
             try:
                 peers = self.data_client.get_stock_peer_comparison(code)
             except EastmoneyError:
@@ -80,6 +86,8 @@ class MarketAnalysisAgent:
                 dividends=dividends,
                 industry_valuation=industry_valuation,
                 industry_valuation_error=industry_valuation_error,
+                financials_error=financials_error,
+                retrieved_at=retrieved_at,
             )
         if asset_type == "fund":
             try:
@@ -96,6 +104,12 @@ class MarketAnalysisAgent:
             if not nav_points:
                 raise ValueError(f"No fund NAV data found for {code}.")
             fund_name = self.data_client.get_fund_name(code)
+            product_info = None
+            product_info_error = None
+            try:
+                product_info = self.data_client.get_fund_product_info(code)
+            except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
+                product_info_error = str(exc)
             holdings_route = None
             try:
                 holdings_route = self.data_client.get_fund_holdings_route(
@@ -112,6 +126,9 @@ class MarketAnalysisAgent:
                 name=fund_name,
                 holdings=holdings,
                 holding_analyses=holding_analyses,
+                product_info=product_info,
+                product_info_error=product_info_error,
+                retrieved_at=retrieved_at,
             )
             apply_holdings_route_method(result["valuation"], holdings_route)
             route_metadata = serialize_holdings_route(holdings_route)
@@ -155,6 +172,7 @@ class MarketAnalysisAgent:
                 except EastmoneyError:
                     index_bars = []
                 if index_bars:
+                    product_data = result["valuation"].get("product_data")
                     result["valuation"] = analyze_index_price_proxy(
                         index_bars=index_bars,
                         index_code=index_candidate.code,
@@ -162,6 +180,7 @@ class MarketAnalysisAgent:
                         index_quote_id=index_candidate.quote_id,
                     )
                     result["valuation"]["holdings_route"] = route_metadata
+                    result["valuation"]["product_data"] = product_data
             result["data_source"] = fund_data_source
             if fund_data_source == "exchange_price_history":
                 result["notes"].insert(
