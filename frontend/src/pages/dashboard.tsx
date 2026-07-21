@@ -61,6 +61,7 @@ interface SubmittedQuery {
   name?: string
   start: string
   end?: string
+  requestId: string
 }
 
 interface ChatMessage {
@@ -76,6 +77,7 @@ interface ChatMessage {
 const defaultQuery: SubmittedQuery = {
   assetType: 'stock',
   code: '600519',
+  requestId: 'default',
   start: '2018-01-01',
 }
 
@@ -88,6 +90,7 @@ export function DashboardPage() {
   const [submitted, setSubmitted] = useState<SubmittedQuery | null>(null)
   const [selectedAssetName, setSelectedAssetName] = useState<string | null>(null)
   const [debouncedKeyword, setDebouncedKeyword] = useState(defaultQuery.code)
+  const [isComposing, setIsComposing] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isResolving, setIsResolving] = useState(false)
   const [chatInput, setChatInput] = useState('')
@@ -104,9 +107,10 @@ export function DashboardPage() {
   const trimmedCode = code.trim()
 
   useEffect(() => {
+    if (isComposing) return
     const timer = window.setTimeout(() => setDebouncedKeyword(trimmedCode), 250)
     return () => window.clearTimeout(timer)
-  }, [trimmedCode])
+  }, [isComposing, trimmedCode])
 
   const healthQuery = useQuery({
     queryFn: getHealth,
@@ -114,7 +118,7 @@ export function DashboardPage() {
   })
 
   const searchQuery = useQuery({
-    enabled: shouldSearchByKeyword(debouncedKeyword),
+    enabled: !isComposing && shouldSearchByKeyword(debouncedKeyword),
     queryFn: () => searchAssets(debouncedKeyword, undefined, 8),
     queryKey: ['asset-search', debouncedKeyword],
   })
@@ -140,7 +144,7 @@ export function DashboardPage() {
   const stockValuationQuery = useQuery({
     enabled: submitted?.assetType === 'stock',
     queryFn: () => getStockValuation(submitted!.code),
-    queryKey: ['stock-valuation', submitted?.code],
+    queryKey: ['stock-valuation', submitted?.code, submitted?.requestId],
   })
 
   const fundNavQuery = useQuery({
@@ -222,6 +226,7 @@ export function DashboardPage() {
         assetType: submittedAssetType,
         code: normalizedInput,
         end: end || undefined,
+        requestId: crypto.randomUUID(),
         start,
       })
       return
@@ -270,6 +275,7 @@ export function DashboardPage() {
         code: candidate.code,
         end: end || undefined,
         name: candidate.name,
+        requestId: crypto.randomUUID(),
         start,
       })
     }
@@ -293,6 +299,7 @@ export function DashboardPage() {
           code: event.asset.code,
           end: end || undefined,
           name: event.asset.name ?? event.analysis.name ?? undefined,
+          requestId: crypto.randomUUID(),
           start,
         })
       }
@@ -514,6 +521,11 @@ export function DashboardPage() {
                   id="code"
                   placeholder="例如：600519、019670、贵州茅台"
                   value={code}
+                  onCompositionEnd={(event) => {
+                    setCode(event.currentTarget.value)
+                    setIsComposing(false)
+                  }}
+                  onCompositionStart={() => setIsComposing(true)}
                   onChange={(event) => {
                     setCode(event.target.value)
                     setSelectedAssetName(null)
@@ -525,7 +537,7 @@ export function DashboardPage() {
                     已选择：{selectedAssetName} ({code})
                   </div>
                 ) : null}
-                {shouldSearchByKeyword(trimmedCode) ? (
+                {!isComposing && shouldSearchByKeyword(trimmedCode) ? (
                   <div className="rounded-md border bg-background p-1">
                     {searchQuery.isFetching ? (
                       <div className="px-2 py-2 text-sm text-muted-foreground">搜索中...</div>
@@ -982,17 +994,35 @@ function StockHistoryTable({ rows }: { rows: Array<{ date: string; close: number
 
 function FundHoldingsTable({ result }: { result: AnalysisResult | undefined }) {
   const holdings = result?.valuation.holdings
+  const route = result?.holdings_route ?? result?.valuation.holdings_route
   const rows = holdings?.items ?? []
+  const title = holdingsScopeLabel(route?.scope)
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between gap-3">
-        <CardTitle>前十大持仓增强</CardTitle>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Badge variant="outline">报告期 {holdings?.report_date ?? '—'}</Badge>
-          <Badge variant="secondary">
-            已分析 {holdings?.analyzed_count ?? 0}/{holdings?.count ?? 0}
-          </Badge>
+      <CardHeader className="gap-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <CardTitle>{title}</CardTitle>
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <Badge variant="outline">来源 {holdingsSourceLabel(route?.source)}</Badge>
+            <Badge variant="outline">数据日期 {route?.as_of ?? holdings?.report_date ?? '—'}</Badge>
+            <Badge variant="outline">覆盖率 {formatPercent(route?.coverage, 1)}</Badge>
+            <Badge variant="secondary">
+              已分析 {holdings?.analyzed_count ?? 0}/{holdings?.count ?? 0}
+            </Badge>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {route?.tracked_index_code ? (
+            <span>
+              跟踪指数 {route.tracked_index_name ?? '—'} ({route.tracked_index_code})
+            </span>
+          ) : null}
+          {route?.target_etf_code ? (
+            <span>
+              目标 ETF {route.target_etf_name ?? '—'} ({route.target_etf_code})
+            </span>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="overflow-x-auto">
@@ -1046,6 +1076,20 @@ function FundHoldingsTable({ result }: { result: AnalysisResult | undefined }) {
       </CardContent>
     </Card>
   )
+}
+
+function holdingsScopeLabel(scope: string | undefined) {
+  if (scope === 'tracked_index_top10') return '跟踪指数前十大成分'
+  if (scope === 'target_etf_top10') return '目标 ETF 前十大持仓'
+  if (scope === 'fund_direct_top10') return '基金直接前十大持仓'
+  return '持仓数据'
+}
+
+function holdingsSourceLabel(source: string | undefined) {
+  if (source === 'csindex_official') return '中证指数官方'
+  if (source === 'eastmoney_fund_disclosure') return '东方财富基金披露'
+  if (source === 'unavailable') return '不可用'
+  return source ?? '—'
 }
 
 function StockValuationTable({

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import date, datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -17,7 +19,9 @@ from market_lens.types import (
     AssetSearchResult,
     AssetType,
     FundHolding,
+    FundHoldingsRoute,
     FundNavPoint,
+    FundTrackingInfo,
     StockBar,
     StockDividendPlan,
     StockDividendSummary,
@@ -223,6 +227,147 @@ class EastmoneyClient:
         content = parse_fund_archives_content(text)
         return parse_fund_holdings_table(content)[:top_n]
 
+    def get_fund_tracking_info(self, code: str) -> FundTrackingInfo:
+        normalized_code = normalize_fund_code(code)
+        params = {
+            "FCODE": normalized_code,
+            "deviceid": "1234567890",
+            "plat": "Android",
+            "product": "EFund",
+            "version": "6.6.8",
+        }
+        detail_url = (
+            "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNDetailInformation?"
+            + urlencode(params)
+        )
+        detail = parse_fund_tracking_info(
+            self._get_validated_json(
+                detail_url,
+                ttl_seconds=24 * 60 * 60,
+                is_success=lambda payload: payload.get("ErrCode") == 0,
+            )
+        )
+        if not detail.index_code:
+            return detail
+
+        position_url = (
+            "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNInverstPosition?"
+            + urlencode(params)
+        )
+        try:
+            position = parse_fund_position_payload(
+                self._get_validated_json(
+                    position_url,
+                    ttl_seconds=24 * 60 * 60,
+                    is_success=lambda payload: payload.get("ErrCode") == 0,
+                )
+            )
+        except EastmoneyError:
+            return detail
+        return replace(
+            detail,
+            target_etf_code=position["target_etf_code"],
+            target_etf_name=position["target_etf_name"],
+        )
+
+    def get_csi_index_top_holdings(
+        self,
+        index_code: str,
+        top_n: int = 10,
+    ) -> list[FundHolding]:
+        normalized_code = str(index_code).strip().upper()
+        if not re.fullmatch(r"[A-Z0-9.]+", normalized_code):
+            raise ValueError(f"Invalid CSI index code: {index_code!r}")
+        url = (
+            "https://www.csindex.com.cn/csindex-home/index/weight/top10new/"
+            f"{quote(normalized_code)}"
+        )
+        payload = self._get_validated_json(
+            url,
+            ttl_seconds=6 * 60 * 60,
+            is_success=lambda value: str(value.get("code")) == "200",
+        )
+        return parse_csi_index_top_holdings(payload)[:top_n]
+
+    def get_fund_holdings_route(
+        self,
+        code: str,
+        top_n: int = 10,
+        fund_name: str | None = None,
+    ) -> FundHoldingsRoute:
+        normalized_code = normalize_fund_code(code)
+        fallback_reasons: list[str] = []
+        tracking: FundTrackingInfo | None = None
+        try:
+            tracking = self.get_fund_tracking_info(normalized_code)
+        except EastmoneyError as exc:
+            fallback_reasons.append(f"tracking_info_unavailable: {exc}")
+
+        resolved_name = fund_name or (tracking.fund_name if tracking else None)
+        if (not tracking or not tracking.index_code) and looks_like_index_fund(resolved_name):
+            fallback_reasons.append("index_fund_tracking_relationship_unresolved")
+            return build_fund_holdings_route(
+                [],
+                source="unavailable",
+                scope="unresolved_index_fund",
+                tracking=tracking,
+                fallback_reasons=fallback_reasons,
+            )
+
+        if tracking and tracking.index_code:
+            try:
+                holdings = self.get_csi_index_top_holdings(tracking.index_code, top_n=top_n)
+            except (ValueError, EastmoneyError) as exc:
+                fallback_reasons.append(f"official_index_holdings_unavailable: {exc}")
+            else:
+                if holdings:
+                    return build_fund_holdings_route(
+                        holdings,
+                        source="csindex_official",
+                        scope="tracked_index_top10",
+                        tracking=tracking,
+                        fallback_reasons=fallback_reasons,
+                    )
+                fallback_reasons.append("official_index_holdings_empty")
+
+            if tracking.target_etf_code:
+                try:
+                    holdings = self.get_fund_holdings(
+                        tracking.target_etf_code,
+                        top_n=top_n,
+                    )
+                except (ValueError, EastmoneyError) as exc:
+                    fallback_reasons.append(f"target_etf_holdings_unavailable: {exc}")
+                else:
+                    if holdings:
+                        return build_fund_holdings_route(
+                            holdings,
+                            source="eastmoney_fund_disclosure",
+                            scope="target_etf_top10",
+                            tracking=tracking,
+                            fallback_reasons=fallback_reasons,
+                        )
+                    fallback_reasons.append("target_etf_holdings_empty")
+
+            if looks_like_feeder_fund(resolved_name):
+                fallback_reasons.append("feeder_fund_target_etf_holdings_unresolved")
+                return build_fund_holdings_route(
+                    [],
+                    source="unavailable",
+                    scope="unresolved_index_fund",
+                    tracking=tracking,
+                    fallback_reasons=fallback_reasons,
+                )
+
+        holdings = self.get_fund_holdings(normalized_code, top_n=top_n)
+        return build_fund_holdings_route(
+            holdings,
+            source="eastmoney_fund_disclosure",
+            scope="fund_direct_top10",
+            tracking=tracking,
+            fallback_reasons=fallback_reasons,
+        )
+
     def get_fund_nav(
         self,
         code: str,
@@ -374,31 +519,36 @@ class EastmoneyClient:
         page: int,
         page_size: int,
     ) -> dict[str, Any]:
+        normalized_code = normalize_fund_code(code)
         params = {
-            "type": "lsjz",
-            "code": code,
-            "page": str(page),
-            "per": str(page_size),
-            "sdate": iso_date(start),
-            "edate": iso_date(end),
+            "fundCode": normalized_code,
+            "pageIndex": str(page),
+            "pageSize": str(page_size),
+            "startDate": iso_date(start),
+            "endDate": iso_date(end),
         }
-        url = "https://fundf10.eastmoney.com/F10DataApi.aspx?" + urlencode(params)
-        text = self._get_text(url, ttl_seconds=24 * 60 * 60)
-        match = re.search(r"var\s+apidata\s*=\s*(\{.*\});?", text, re.S)
-        if not match:
+        url = "https://api.fund.eastmoney.com/f10/lsjz?" + urlencode(params)
+        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+        if payload.get("ErrCode") != 0:
+            message = payload.get("ErrMsg") or "unknown upstream error"
+            raise EastmoneyError(f"Tiantian Fund NAV request failed: {message}")
+
+        data = payload.get("Data")
+        if not isinstance(data, dict):
             raise EastmoneyError("Unexpected Tiantian Fund NAV response")
-        raw = match.group(1)
-        raw = raw.replace("content:", '"content":')
-        raw = raw.replace("records:", '"records":')
-        raw = raw.replace("pages:", '"pages":')
-        raw = raw.replace("curpage:", '"curpage":')
-        payload = json.loads(raw)
-        content = unescape(payload.get("content") or "")
+        raw_rows = data.get("LSJZList")
+        if not isinstance(raw_rows, list):
+            raise EastmoneyError("Unexpected Tiantian Fund NAV response")
+
+        rows = [item for raw_row in raw_rows if (item := parse_fund_nav_row(raw_row))]
+        records = int(payload.get("TotalCount") or len(rows))
+        response_page_size = int(payload.get("PageSize") or page_size)
+        pages = max(1, (records + response_page_size - 1) // response_page_size)
         return {
-            "records": payload.get("records"),
-            "pages": payload.get("pages"),
-            "curpage": payload.get("curpage"),
-            "rows": parse_fund_nav_table(content),
+            "records": records,
+            "pages": pages,
+            "curpage": int(payload.get("PageIndex") or page),
+            "rows": rows,
         }
 
     def _get_json(self, url: str, ttl_seconds: int) -> dict[str, Any]:
@@ -408,6 +558,23 @@ class EastmoneyClient:
         except json.JSONDecodeError as exc:
             host = urlparse(url).netloc
             raise EastmoneyError(f"Unexpected JSON response from {host}") from exc
+
+    def _get_validated_json(
+        self,
+        url: str,
+        ttl_seconds: int,
+        is_success: Callable[[dict[str, Any]], bool],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        max_attempts = self.retries + 1
+        for attempt in range(max_attempts):
+            payload = self._get_json(url, ttl_seconds=ttl_seconds)
+            if is_success(payload):
+                return payload
+            self.cache.delete(url)
+            if attempt < max_attempts - 1:
+                time.sleep(0.4 * (2**attempt))
+        return payload
 
     def _get_text(self, url: str, ttl_seconds: int) -> str:
         cached = self.cache.get(url, ttl_seconds=ttl_seconds)
@@ -453,9 +620,19 @@ class EastmoneyClient:
         if host == "fundf10.eastmoney.com":
             headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
             headers["Referer"] = "https://fundf10.eastmoney.com/"
+        elif host == "api.fund.eastmoney.com":
+            headers["Accept"] = "application/json,text/plain,*/*"
+            headers["Referer"] = "https://fundf10.eastmoney.com/"
         elif host == "fund.eastmoney.com":
             headers["Accept"] = "application/javascript,text/javascript,*/*;q=0.8"
             headers["Referer"] = "https://fund.eastmoney.com/"
+        elif host == "fundmobapi.eastmoney.com":
+            headers["Accept"] = "application/json,text/plain,*/*"
+            headers["Referer"] = "https://fund.eastmoney.com/"
+            headers["User-Agent"] = "Mozilla/5.0"
+        elif host == "www.csindex.com.cn":
+            headers["Accept"] = "application/json,text/plain,*/*"
+            headers["Referer"] = "https://www.csindex.com.cn/"
         elif host == "datacenter-web.eastmoney.com":
             headers["Referer"] = "https://data.eastmoney.com/"
         elif host == "emweb.securities.eastmoney.com":
@@ -763,6 +940,15 @@ def normalize_search_text(value: str) -> str:
     return re.sub(r"\s+", "", value).upper()
 
 
+def looks_like_index_fund(name: str | None) -> bool:
+    normalized = normalize_search_text(name or "")
+    return "ETF" in normalized or "指数" in normalized
+
+
+def looks_like_feeder_fund(name: str | None) -> bool:
+    return "联接" in normalize_search_text(name or "")
+
+
 def build_search_keywords(keyword: str) -> list[str]:
     normalized = normalize_search_text(keyword)
     if not normalized:
@@ -850,6 +1036,109 @@ def parse_pingzhongdata_fund_name(text: str) -> str | None:
     return repair_mojibake(match.group(1))
 
 
+def parse_fund_tracking_info(payload: dict[str, Any]) -> FundTrackingInfo:
+    if payload.get("ErrCode") != 0 or not isinstance(payload.get("Datas"), dict):
+        message = payload.get("ErrMsg") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve fund tracking information: {message}")
+    data = payload["Datas"]
+    fund_code = re.sub(r"\D", "", str(data.get("FCODE") or ""))
+    if len(fund_code) != 6:
+        raise EastmoneyError("Failed to resolve fund tracking information: invalid fund code")
+    return FundTrackingInfo(
+        fund_code=fund_code,
+        fund_name=repair_mojibake(data.get("SHORTNAME")),
+        fund_type=repair_mojibake(data.get("FTYPE")),
+        index_code=str(data.get("INDEXCODE") or "").strip() or None,
+        index_name=repair_mojibake(data.get("INDEXNAME")),
+        target_etf_code=None,
+        target_etf_name=None,
+    )
+
+
+def parse_fund_position_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("ErrCode") != 0 or not isinstance(payload.get("Datas"), dict):
+        message = payload.get("ErrMsg") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve fund position information: {message}")
+    data = payload["Datas"]
+    report_date = parse_optional_date(payload.get("Expansion"))
+    holdings: list[FundHolding] = []
+    for index, row in enumerate(data.get("fundStocks") or [], start=1):
+        if not isinstance(row, dict):
+            continue
+        code = re.sub(r"\D", "", str(row.get("GPDM") or ""))
+        name = repair_mojibake(row.get("GPJC"))
+        if len(code) != 6 or not name:
+            continue
+        holdings.append(
+            FundHolding(
+                rank=index,
+                code=code,
+                name=name,
+                weight_pct=to_float(row.get("JZBL")),
+                shares_10k=None,
+                market_value_10k=None,
+                report_date=report_date,
+            )
+        )
+    target_etf_code = re.sub(r"\D", "", str(data.get("ETFCODE") or "")) or None
+    if target_etf_code and len(target_etf_code) != 6:
+        target_etf_code = None
+    return {
+        "holdings": holdings,
+        "report_date": report_date,
+        "target_etf_code": target_etf_code,
+        "target_etf_name": repair_mojibake(data.get("ETFSHORTNAME")),
+    }
+
+
+def parse_csi_index_top_holdings(payload: dict[str, Any]) -> list[FundHolding]:
+    if str(payload.get("code")) != "200" or not isinstance(payload.get("data"), dict):
+        message = payload.get("msg") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve CSI index holdings: {message}")
+    data = payload["data"]
+    report_date = parse_optional_date(data.get("updateDate"))
+    holdings: list[FundHolding] = []
+    for index, row in enumerate(data.get("weightList") or [], start=1):
+        if not isinstance(row, dict):
+            continue
+        code = re.sub(r"\D", "", str(row.get("securityCode") or ""))
+        name = repair_mojibake(row.get("securityName"))
+        if len(code) != 6 or not name:
+            continue
+        holdings.append(
+            FundHolding(
+                rank=int(row["rowNum"]) if str(row.get("rowNum") or "").isdigit() else index,
+                code=code,
+                name=name,
+                weight_pct=to_float(row.get("preciseWeight") or row.get("weight")),
+                shares_10k=None,
+                market_value_10k=None,
+                report_date=report_date,
+            )
+        )
+    return sorted(holdings, key=lambda item: item.rank)
+
+
+def build_fund_holdings_route(
+    holdings: list[FundHolding],
+    source: str,
+    scope: str,
+    tracking: FundTrackingInfo | None,
+    fallback_reasons: list[str],
+) -> FundHoldingsRoute:
+    report_date = next((item.report_date for item in holdings if item.report_date), None)
+    coverage = min(sum(item.weight_pct or 0.0 for item in holdings) / 100.0, 1.0)
+    return FundHoldingsRoute(
+        holdings=holdings,
+        source=source,
+        scope=scope,
+        as_of=report_date,
+        coverage=round(coverage, 4),
+        tracking=tracking,
+        fallback_reasons=tuple(fallback_reasons),
+    )
+
+
 def parse_fund_archives_content(text: str) -> str:
     match = re.search(
         r"var\s+apidata\s*=\s*\{\s*content:\"(.*)\",arryear:",
@@ -910,6 +1199,22 @@ def parse_fund_nav_table(content: str) -> list[FundNavPoint]:
             )
         )
     return rows
+
+
+def parse_fund_nav_row(row: Any) -> FundNavPoint | None:
+    if not isinstance(row, dict):
+        return None
+    nav_date = parse_optional_date(row.get("FSRQ"))
+    if nav_date is None:
+        return None
+    return FundNavPoint(
+        date=nav_date,
+        unit_nav=to_float(row.get("DWJZ")),
+        cumulative_nav=to_float(row.get("LJJZ")),
+        daily_growth_pct=to_float(row.get("JZZZL")),
+        subscribe_status=repair_mojibake(row.get("SGZT")),
+        redeem_status=repair_mojibake(row.get("SHZT")),
+    )
 
 
 class FundNavHTMLParser(HTMLParser):

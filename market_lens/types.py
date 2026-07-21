@@ -116,6 +116,28 @@ class FundHolding:
 
 
 @dataclass(frozen=True)
+class FundTrackingInfo:
+    fund_code: str
+    fund_name: str | None
+    fund_type: str | None
+    index_code: str | None
+    index_name: str | None
+    target_etf_code: str | None
+    target_etf_name: str | None
+
+
+@dataclass(frozen=True)
+class FundHoldingsRoute:
+    holdings: list[FundHolding]
+    source: str
+    scope: str
+    as_of: date | None
+    coverage: float
+    tracking: FundTrackingInfo | None
+    fallback_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class FundNavPoint:
     date: date
     unit_nav: float | None

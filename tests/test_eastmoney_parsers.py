@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from datetime import date
+
 from market_lens.data.eastmoney import (
+    EastmoneyClient,
+    EastmoneyError,
     build_index_search_keywords,
     build_search_keywords,
     f10_stock_code,
@@ -9,9 +13,13 @@ from market_lens.data.eastmoney import (
     is_a_share_symbol,
     parse_asset_search_row,
     parse_cash_per_share,
+    parse_csi_index_top_holdings,
     parse_fund_archives_content,
     parse_fund_holdings_table,
+    parse_fund_nav_row,
     parse_fund_nav_table,
+    parse_fund_position_payload,
+    parse_fund_tracking_info,
     parse_pingzhongdata_fund_name,
     parse_stock_dividend_plan,
     parse_stock_financial_indicator,
@@ -21,6 +29,7 @@ from market_lens.data.eastmoney import (
     rank_search_results,
     repair_mojibake,
 )
+from market_lens.types import FundHolding, FundTrackingInfo
 
 
 def test_infer_secid() -> None:
@@ -126,6 +135,273 @@ def test_parse_fund_nav_table() -> None:
     assert len(rows) == 1
     assert rows[0].unit_nav == 1.2345
     assert rows[0].daily_growth_pct == 0.88
+
+
+def test_parse_fund_nav_row() -> None:
+    row = parse_fund_nav_row(
+        {
+            "FSRQ": "2026-07-20",
+            "DWJZ": "1.0241",
+            "LJJZ": "1.0241",
+            "JZZZL": "0.42",
+            "SGZT": "开放申购",
+            "SHZT": "开放赎回",
+        }
+    )
+
+    assert row is not None
+    assert row.date.isoformat() == "2026-07-20"
+    assert row.unit_nav == 1.0241
+    assert row.daily_growth_pct == 0.42
+    assert parse_fund_nav_row({"FSRQ": ""}) is None
+
+
+def test_parse_fund_tracking_and_target_etf() -> None:
+    tracking = parse_fund_tracking_info(
+        {
+            "Datas": {
+                "FCODE": "025856",
+                "SHORTNAME": "华夏中证电网设备主题ETF发起式联接A",
+                "FTYPE": "指数型-股票",
+                "INDEXCODE": "931994",
+                "INDEXNAME": "中证电网设备主题指数",
+            },
+            "ErrCode": 0,
+        }
+    )
+    position = parse_fund_position_payload(
+        {
+            "Datas": {
+                "ETFCODE": "159326",
+                "ETFSHORTNAME": "电网设备ETF华夏",
+                "fundStocks": [
+                    {"GPDM": "600089", "GPJC": "特变电工", "JZBL": "0.25"}
+                ],
+            },
+            "ErrCode": 0,
+            "Expansion": "2026-06-30",
+        }
+    )
+
+    assert tracking.index_code == "931994"
+    assert tracking.index_name == "中证电网设备主题指数"
+    assert position["target_etf_code"] == "159326"
+    assert position["holdings"][0].weight_pct == 0.25
+    assert position["report_date"].isoformat() == "2026-06-30"
+
+
+def test_parse_csi_index_top_holdings() -> None:
+    rows = parse_csi_index_top_holdings(
+        {
+            "code": "200",
+            "data": {
+                "updateDate": "2026-07-20",
+                "weightList": [
+                    {
+                        "rowNum": "1",
+                        "securityCode": "600487",
+                        "securityName": "亨通光电",
+                        "weight": 10.47,
+                        "preciseWeight": 10.472584,
+                    }
+                ],
+            },
+        }
+    )
+
+    assert len(rows) == 1
+    assert rows[0].name == "亨通光电"
+    assert rows[0].weight_pct == 10.472584
+    assert rows[0].report_date == date(2026, 7, 20)
+
+
+def test_fund_holdings_route_prefers_official_tracked_index(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    tracking = FundTrackingInfo(
+        fund_code="025856",
+        fund_name="华夏中证电网设备主题ETF发起式联接A",
+        fund_type="指数型-股票",
+        index_code="931994",
+        index_name="中证电网设备主题指数",
+        target_etf_code="159326",
+        target_etf_name="电网设备ETF华夏",
+    )
+    official = [
+        FundHolding(1, "600487", "亨通光电", 10.47, None, None, date(2026, 7, 20))
+    ]
+    monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+    monkeypatch.setattr(client, "get_csi_index_top_holdings", lambda code, top_n: official)
+
+    def fail_if_direct_holdings_are_used(code: str, top_n: int = 10):
+        raise AssertionError(f"direct holdings must not be used for {code}, top_n={top_n}")
+
+    monkeypatch.setattr(client, "get_fund_holdings", fail_if_direct_holdings_are_used)
+    route = client.get_fund_holdings_route("025856")
+
+    assert route.scope == "tracked_index_top10"
+    assert route.source == "csindex_official"
+    assert route.coverage == 0.1047
+    assert route.holdings == official
+
+
+def test_fund_holdings_route_falls_back_to_target_etf(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    tracking = FundTrackingInfo(
+        fund_code="025856",
+        fund_name="华夏中证电网设备主题ETF发起式联接A",
+        fund_type="指数型-股票",
+        index_code="931994",
+        index_name="中证电网设备主题指数",
+        target_etf_code="159326",
+        target_etf_name="电网设备ETF华夏",
+    )
+    target_etf = [
+        FundHolding(1, "600487", "亨通光电", 15.01, None, None, date(2026, 6, 30))
+    ]
+    monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+
+    def fail_official_index(code: str, top_n: int = 10):
+        raise EastmoneyError(f"official index unavailable: {code}, top_n={top_n}")
+
+    monkeypatch.setattr(client, "get_csi_index_top_holdings", fail_official_index)
+    monkeypatch.setattr(
+        client,
+        "get_fund_holdings",
+        lambda code, top_n=10: target_etf if code == "159326" else [],
+    )
+    route = client.get_fund_holdings_route("025856")
+
+    assert route.scope == "target_etf_top10"
+    assert route.coverage == 0.1501
+    assert route.holdings == target_etf
+    assert route.fallback_reasons[0].startswith("official_index_holdings_unavailable")
+
+
+def test_fund_holdings_route_uses_direct_holdings_for_active_fund(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    tracking = FundTrackingInfo(
+        fund_code="000001",
+        fund_name="示例主动股票基金",
+        fund_type="股票型",
+        index_code=None,
+        index_name=None,
+        target_etf_code=None,
+        target_etf_name=None,
+    )
+    direct = [
+        FundHolding(1, "600519", "贵州茅台", 8.5, None, None, date(2026, 6, 30))
+    ]
+    monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+    monkeypatch.setattr(client, "get_fund_holdings", lambda code, top_n=10: direct)
+
+    route = client.get_fund_holdings_route("000001", fund_name=tracking.fund_name)
+
+    assert route.scope == "fund_direct_top10"
+    assert route.source == "eastmoney_fund_disclosure"
+    assert route.coverage == 0.085
+    assert route.holdings == direct
+
+
+def test_fund_holdings_route_fails_closed_for_unresolved_index_fund(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+
+    def fail_tracking(code: str):
+        raise EastmoneyError(f"tracking unavailable: {code}")
+
+    def fail_if_direct_holdings_are_used(code: str, top_n: int = 10):
+        raise AssertionError(f"direct holdings must not be used for {code}, top_n={top_n}")
+
+    monkeypatch.setattr(client, "get_fund_tracking_info", fail_tracking)
+    monkeypatch.setattr(client, "get_fund_holdings", fail_if_direct_holdings_are_used)
+    route = client.get_fund_holdings_route(
+        "025856",
+        fund_name="华夏中证电网设备主题ETF发起式联接A",
+    )
+
+    assert route.scope == "unresolved_index_fund"
+    assert route.source == "unavailable"
+    assert route.coverage == 0.0
+    assert route.holdings == []
+
+
+def test_validated_json_evicts_business_errors_before_retry(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    client.retries = 1
+    responses = iter(
+        [
+            {"ErrCode": 61136, "ErrMsg": "busy"},
+            {"ErrCode": 0, "Datas": {"FCODE": "025856"}},
+        ]
+    )
+
+    class FakeCache:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def delete(self, url: str) -> None:
+            self.deleted.append(url)
+
+    client.cache = FakeCache()
+    monkeypatch.setattr(client, "_get_json", lambda url, ttl_seconds: next(responses))
+    monkeypatch.setattr("market_lens.data.eastmoney.time.sleep", lambda seconds: None)
+
+    payload = client._get_validated_json(
+        "https://example.test/data",
+        ttl_seconds=60,
+        is_success=lambda value: value.get("ErrCode") == 0,
+    )
+
+    assert payload["ErrCode"] == 0
+    assert client.cache.deleted == ["https://example.test/data"]
+
+
+def test_mobile_fund_api_uses_compatible_user_agent() -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    client.headers = {"User-Agent": "full browser user agent"}
+
+    headers = client._headers_for_url("https://fundmobapi.eastmoney.com/example")
+
+    assert headers["User-Agent"] == "Mozilla/5.0"
+
+
+def test_get_fund_nav_uses_json_pagination(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str, ttl_seconds: int) -> dict[str, object]:
+        requested_urls.append(url)
+        page = 2 if "pageIndex=2" in url else 1
+        return {
+            "Data": {
+                "LSJZList": [
+                    {
+                        "FSRQ": f"2026-07-{21 - page:02d}",
+                        "DWJZ": str(1 + page / 100),
+                        "LJJZ": str(1 + page / 100),
+                        "JZZZL": "0.1",
+                        "SGZT": "开放申购",
+                        "SHZT": "开放赎回",
+                    }
+                ]
+            },
+            "ErrCode": 0,
+            "TotalCount": 2,
+            "PageSize": 1,
+            "PageIndex": page,
+        }
+
+    monkeypatch.setattr(client, "_get_json", fake_get_json)
+    rows = client.get_fund_nav(
+        "025856",
+        start=date(2026, 7, 1),
+        end=date(2026, 7, 21),
+        page_size=1,
+    )
+
+    assert [row.date.isoformat() for row in rows] == ["2026-07-19", "2026-07-20"]
+    assert len(requested_urls) == 2
+    assert all("api.fund.eastmoney.com/f10/lsjz" in url for url in requested_urls)
+    assert all("fundCode=025856" in url for url in requested_urls)
 
 
 def test_parse_fund_holdings_table() -> None:

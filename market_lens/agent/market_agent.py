@@ -10,7 +10,7 @@ from market_lens.data.eastmoney import (
     is_a_share_symbol,
     stock_bars_from_valuations,
 )
-from market_lens.types import FundHolding
+from market_lens.types import FundHolding, FundHoldingsRoute
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.framework import analyze_index_price_proxy
 
@@ -86,8 +86,13 @@ class MarketAnalysisAgent:
             if not nav_points:
                 raise ValueError(f"No fund NAV data found for {code}.")
             fund_name = self.data_client.get_fund_name(code)
+            holdings_route = None
             try:
-                holdings = self.data_client.get_fund_holdings(code)
+                holdings_route = self.data_client.get_fund_holdings_route(
+                    code,
+                    fund_name=fund_name,
+                )
+                holdings = holdings_route.holdings
             except EastmoneyError:
                 holdings = []
             holding_analyses = self._analyze_fund_holdings(holdings, end=end)
@@ -98,9 +103,38 @@ class MarketAnalysisAgent:
                 holdings=holdings,
                 holding_analyses=holding_analyses,
             )
+            apply_holdings_route_method(result["valuation"], holdings_route)
+            route_metadata = serialize_holdings_route(holdings_route)
+            result["holdings_route"] = route_metadata
+            result["valuation"]["holdings_route"] = route_metadata
+            result["notes"].insert(0, holdings_route_note(holdings_route))
+
             index_candidate = None
             if result["valuation"].get("score") is None:
-                index_candidate = self.data_client.find_index_for_fund(fund_name or code)
+                if (
+                    holdings_route
+                    and holdings_route.tracking
+                    and holdings_route.tracking.index_code
+                ):
+                    try:
+                        candidates = self.data_client.search_assets(
+                            holdings_route.tracking.index_code,
+                            limit=5,
+                            include_indexes=True,
+                        )
+                    except EastmoneyError:
+                        candidates = []
+                    index_candidate = next(
+                        (
+                            item
+                            for item in candidates
+                            if item.asset_type == "index"
+                            and item.code == holdings_route.tracking.index_code
+                        ),
+                        None,
+                    )
+                if index_candidate is None:
+                    index_candidate = self.data_client.find_index_for_fund(fund_name or code)
             if index_candidate and index_candidate.quote_id:
                 try:
                     index_bars = self.data_client.get_index_history(
@@ -117,6 +151,7 @@ class MarketAnalysisAgent:
                         index_name=index_candidate.name,
                         index_quote_id=index_candidate.quote_id,
                     )
+                    result["valuation"]["holdings_route"] = route_metadata
             result["data_source"] = fund_data_source
             if fund_data_source == "exchange_price_history":
                 result["notes"].insert(
@@ -210,3 +245,77 @@ def is_supported_holding_stock(code: str) -> bool:
         return is_a_share_symbol(code)
     except ValueError:
         return False
+
+
+def serialize_holdings_route(route: FundHoldingsRoute | None) -> dict[str, Any]:
+    if route is None:
+        return {
+            "source": "unavailable",
+            "scope": "unavailable",
+            "as_of": None,
+            "coverage": 0.0,
+            "fallback_reasons": [],
+            "fund_type": None,
+            "tracked_index_code": None,
+            "tracked_index_name": None,
+            "target_etf_code": None,
+            "target_etf_name": None,
+        }
+    tracking = route.tracking
+    return {
+        "source": route.source,
+        "scope": route.scope,
+        "as_of": route.as_of.isoformat() if route.as_of else None,
+        "coverage": route.coverage,
+        "fallback_reasons": list(route.fallback_reasons),
+        "fund_type": tracking.fund_type if tracking else None,
+        "tracked_index_code": tracking.index_code if tracking else None,
+        "tracked_index_name": tracking.index_name if tracking else None,
+        "target_etf_code": tracking.target_etf_code if tracking else None,
+        "target_etf_name": tracking.target_etf_name if tracking else None,
+    }
+
+
+def apply_holdings_route_method(
+    valuation: dict[str, Any],
+    route: FundHoldingsRoute | None,
+) -> None:
+    if route is None:
+        return
+    if route.scope == "tracked_index_top10":
+        valuation.update(
+            {
+                "method": "index_constituents_weighted_multi_factor",
+                "profile": "index_fund",
+                "profile_name": "指数基金",
+            }
+        )
+    elif route.scope == "target_etf_top10":
+        valuation.update(
+            {
+                "method": "target_etf_holdings_weighted_multi_factor",
+                "profile": "index_fund",
+                "profile_name": "指数基金",
+            }
+        )
+
+
+def holdings_route_note(route: FundHoldingsRoute | None) -> str:
+    if route is None:
+        return "Fund holdings routing was unavailable; valuation confidence is limited."
+    if route.scope == "tracked_index_top10":
+        return (
+            "Valuation uses official top constituents of the tracked index, "
+            f"dated {route.as_of.isoformat() if route.as_of else 'unknown'}."
+        )
+    if route.scope == "target_etf_top10":
+        return (
+            "Official index holdings were unavailable; valuation falls back to the latest "
+            "disclosed top holdings of the target ETF."
+        )
+    if route.scope == "unresolved_index_fund":
+        return (
+            "The tracked index relationship could not be resolved, so direct fund holdings "
+            "were not used as a substitute."
+        )
+    return "Valuation uses the fund's latest disclosed direct stock holdings."

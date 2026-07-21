@@ -111,6 +111,19 @@ export interface FundNavPoint {
   redeem_status: string | null
 }
 
+export interface FundHoldingsRouteInfo {
+  source: string
+  scope: string
+  as_of: string | null
+  coverage: number
+  fallback_reasons: string[]
+  fund_type: string | null
+  tracked_index_code: string | null
+  tracked_index_name: string | null
+  target_etf_code: string | null
+  target_etf_name: string | null
+}
+
 export interface AnalysisResult {
   asset_type: AssetType
   code: string
@@ -140,6 +153,7 @@ export interface AnalysisResult {
     required_future_data?: string[]
     method?: string
     status?: string
+    holdings_route?: FundHoldingsRouteInfo
     portfolio?: {
       metrics?: Record<string, { value: number | null; coverage: number }>
       industry_weights?: Array<{ industry: string; weight_pct: number }>
@@ -168,6 +182,7 @@ export interface AnalysisResult {
       }>
     }
   }
+  holdings_route?: FundHoldingsRouteInfo
   performance: {
     sample_size: number
     total_return: number | null

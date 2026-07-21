@@ -73,3 +73,15 @@ class SQLiteCache:
                 )
         except sqlite3.Error:
             return
+
+    def delete(self, url: str) -> None:
+        if not self.enabled:
+            return
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "DELETE FROM http_cache WHERE cache_key = ?",
+                    (self.key_for(url),),
+                )
+        except sqlite3.Error:
+            return
