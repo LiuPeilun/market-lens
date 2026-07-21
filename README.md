@@ -1,5 +1,9 @@
 # Market Lens
 
+Project planning, verified data availability, valuation decisions, and current progress are tracked
+in [PROJECT_PLAN.md](PROJECT_PLAN.md). Read and update that document when starting or completing a
+project phase.
+
 Market Lens is a local agent-service scaffold for investment research workflows. The first
 module focuses on A-share and fund analysis using Eastmoney/Tiantian Fund web data endpoints.
 
