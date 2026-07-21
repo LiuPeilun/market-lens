@@ -8,9 +8,11 @@ from typing import Annotated
 import typer
 
 from market_lens.agent.market_agent import MarketAnalysisAgent
+from market_lens.backtesting.collector import StockBacktestCollector
 from market_lens.backtesting.engine import run_backtest
 from market_lens.backtesting.io import load_backtest_dataset
 from market_lens.backtesting.models import BacktestConfiguration, BacktestDataError
+from market_lens.backtesting.universe import load_stock_universe_manifest
 
 app = typer.Typer(help="Market Lens command line tools.")
 
@@ -75,6 +77,55 @@ def backtest(
         return
     output.write_text(rendered + "\n", encoding="utf-8")
     typer.echo(f"Backtest report written to {output}")
+
+
+@app.command("collect-stock-backtest")
+def collect_stock_backtest(
+    universe: Annotated[
+        Path,
+        typer.Argument(help="Verified historical stock universe manifest in JSON format"),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Write the collected dataset to this path"),
+    ],
+    start: Annotated[str, typer.Option("--start", help="First collection date")],
+    end: Annotated[str, typer.Option("--end", help="Last collection date")],
+    frequency: Annotated[
+        str,
+        typer.Option("--frequency", help="monthly or quarterly"),
+    ] = "monthly",
+    benchmark_quote_id: Annotated[
+        str,
+        typer.Option("--benchmark-quote-id", help="Eastmoney benchmark quote id"),
+    ] = "1.000300",
+    strict: Annotated[
+        bool,
+        typer.Option("--strict/--allow-partial", help="Fail on any stock collection error"),
+    ] = True,
+) -> None:
+    if frequency not in {"monthly", "quarterly"}:
+        raise typer.BadParameter("frequency must be monthly or quarterly")
+    try:
+        manifest = load_stock_universe_manifest(universe)
+        dataset = StockBacktestCollector().collect(
+            manifest,
+            start=parse_cli_date(start),
+            end=parse_cli_date(end),
+            frequency=frequency,
+            benchmark_quote_id=benchmark_quote_id,
+            strict=strict,
+        )
+    except (BacktestDataError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    output.write_text(
+        json.dumps(dataset, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    typer.echo(
+        f"Collected {len(dataset['analyses'])} snapshots for "
+        f"{len(dataset['prices'])} stocks into {output}"
+    )
 
 
 def parse_cli_date(value: str) -> date:

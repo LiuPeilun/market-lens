@@ -143,6 +143,9 @@ uv run market-lens analyze stock 600519 --start 2018-01-01
 uv run market-lens analyze fund 161725 --start 2015-01-01
 ```
 
+Point-in-time backtesting requires a verified historical universe manifest. See
+[docs/BACKTESTING.md](docs/BACKTESTING.md) before collecting or evaluating a dataset.
+
 ## Architecture
 
 ```text
@@ -150,6 +153,7 @@ market_lens/
   agent/          Business orchestration for user-facing analysis
   capabilities/   Domain capability packs exposed through the common tool layer
   api/            FastAPI app and schemas
+  backtesting/    Point-in-time dataset collection and offline model evaluation
   data/           Eastmoney/Tiantian Fund data adapters
   storage/        SQLite cache and Supabase persistence adapter
   tools/          Tool registry, schemas, policy, execution, and audit boundaries
