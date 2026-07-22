@@ -555,6 +555,7 @@ class EastmoneyClient:
             raise ValueError("max_reports must be positive or None")
 
         code = f10_stock_code(symbol)
+        expected_security_code = normalize_symbol(symbol)
         tab = F10_FINANCIAL_STATEMENT_TABS[statement]
         company_type_code = F10_FINANCIAL_COMPANY_TYPES[company_type]
         report_date_type = F10_FINANCIAL_REPORT_SCOPES[report_scope]
@@ -588,7 +589,14 @@ class EastmoneyClient:
                 + urlencode(data_params)
             )
             payload = self._get_json(data_url, ttl_seconds=24 * 60 * 60)
-            rows.extend(validated_f10_financial_rows(payload, statement))
+            statement_rows = validated_f10_financial_rows(payload, statement)
+            validate_f10_financial_statement_route(
+                statement_rows,
+                expected_security_code=expected_security_code,
+                requested_dates=set(date_chunk),
+                context=statement,
+            )
+            rows.extend(statement_rows)
         return deduplicate_financial_statement_rows(rows)
 
     def get_stock_peer_comparison(self, symbol: str) -> dict[str, list[StockPeerComparison]]:
@@ -1973,8 +1981,11 @@ def parse_stock_financial_indicator(row: dict[str, Any]) -> StockFinancialIndica
 
 
 def financial_statement_common_fields(row: dict[str, Any]) -> dict[str, Any]:
+    code = str(row.get("SECURITY_CODE") or "").strip()
+    if not re.fullmatch(r"\d{6}", code):
+        raise EastmoneyError("Eastmoney F10 financial statement row has no valid code")
     return {
-        "code": str(row.get("SECURITY_CODE") or ""),
+        "code": code,
         "report_date": parse_date(str(row["REPORT_DATE"])),
         "report_type": repair_mojibake(row.get("REPORT_TYPE")),
         "report_name": repair_mojibake(row.get("REPORT_DATE_NAME")),
@@ -2058,12 +2069,30 @@ def validated_f10_financial_rows(
 
 
 def unique_report_dates(rows: list[dict[str, Any]]) -> list[date]:
-    dates = {
-        parsed
-        for row in rows
-        if (parsed := parse_optional_date(row.get("REPORT_DATE"))) is not None
-    }
+    dates: set[date] = set()
+    for row in rows:
+        parsed = parse_optional_date(row.get("REPORT_DATE"))
+        if parsed is None:
+            raise EastmoneyError("Eastmoney F10 report date list contains no report date")
+        dates.add(parsed)
     return sorted(dates, reverse=True)
+
+
+def validate_f10_financial_statement_route(
+    rows: list[dict[str, Any]],
+    *,
+    expected_security_code: str,
+    requested_dates: set[date],
+    context: str,
+) -> None:
+    for row in rows:
+        source_code = str(row.get("SECURITY_CODE") or "").strip()
+        report_date = parse_optional_date(row.get("REPORT_DATE"))
+        if source_code != expected_security_code or report_date not in requested_dates:
+            raise EastmoneyError(
+                f"Eastmoney F10 {context} route mismatch: expected "
+                f"{expected_security_code} and requested report dates"
+            )
 
 
 def deduplicate_financial_statement_rows(

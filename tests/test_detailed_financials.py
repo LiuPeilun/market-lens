@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from datetime import date
 from pathlib import Path
@@ -157,6 +158,50 @@ def test_statement_client_accepts_empty_date_list(monkeypatch) -> None:
     monkeypatch.setattr(client, "_get_json", lambda url, ttl_seconds: {"data": []})
 
     assert client.get_stock_cash_flow_statements("300750") == []
+
+
+def test_statement_date_list_rejects_nonempty_row_without_date(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    monkeypatch.setattr(client, "_get_json", lambda url, ttl_seconds: {"data": [{}]})
+
+    with pytest.raises(EastmoneyError, match="date list contains no report date"):
+        client.get_stock_cash_flow_statements("300750")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("SECURITY_CODE", "000002"),
+        ("SECURITY_CODE", None),
+        ("REPORT_DATE", "2024-12-31 00:00:00"),
+    ],
+)
+def test_statement_client_rejects_response_route_drift(
+    monkeypatch,
+    field: str,
+    value: object,
+) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    payload = load_fixture("f10_income_statement.json")
+    payload["data"][0][field] = value
+
+    def fake_get_json(url: str, ttl_seconds: int) -> dict:
+        if "DateAjaxNew" in url:
+            return {"data": [{"REPORT_DATE": "2025-12-31 00:00:00"}]}
+        return copy.deepcopy(payload)
+
+    monkeypatch.setattr(client, "_get_json", fake_get_json)
+
+    with pytest.raises(EastmoneyError, match="income_statement route mismatch"):
+        client.get_stock_income_statements("300750")
+
+
+def test_statement_parser_rejects_missing_security_code() -> None:
+    payload = load_fixture("f10_balance_sheet.json")
+    payload["data"][0].pop("SECURITY_CODE")
+
+    with pytest.raises(EastmoneyError, match="has no valid code"):
+        parse_stock_balance_sheet(payload["data"][0])
 
 
 def test_statement_deduplication_keeps_latest_notice_date() -> None:

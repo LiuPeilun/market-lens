@@ -223,16 +223,35 @@ def test_reit_research_requires_point_in_time_disclosures() -> None:
         available_date=None,
         point_in_time_eligible=False,
     )
+    future_distribution = replace(
+        valid_distribution,
+        announcement_date=date(2026, 4, 2),
+        available_date=date(2026, 4, 2),
+        point_in_time_eligible=True,
+    )
+    future_notice = replace(
+        valid_notice,
+        publish_date=date(2026, 4, 2),
+        announcement_id="annual-2025-future",
+    )
     context = build_reit_research_context(
         analysis_as_of=ANALYSIS_AS_OF,
         profile=reit_profile(),
-        prices=[reit_price(date(2026, 3, 30), 1.5)],
+        prices=[
+            reit_price(date(2026, 3, 30), 1.5),
+            reit_price(date(2026, 4, 1), 1.6),
+        ],
         financials=[
             reit_financial(notice_date=date(2026, 3, 20)),
             reit_financial(notice_date=None),
+            reit_financial(notice_date=date(2026, 4, 2)),
         ],
-        distributions=[valid_distribution, unavailable_distribution],
-        notices=[valid_notice],
+        distributions=[
+            valid_distribution,
+            unavailable_distribution,
+            future_distribution,
+        ],
+        notices=[valid_notice, future_notice],
         errors={},
         retrieved_at=RETRIEVED_AT,
     )
@@ -241,6 +260,18 @@ def test_reit_research_requires_point_in_time_disclosures() -> None:
     assert context["route"]["main_model"] == "reit_basic"
     assert context["datasets"]["financials"]["report_count"] == 1
     assert context["datasets"]["distributions"]["distribution_count"] == 1
+    assert context["datasets"]["exchange_price"]["sample_size"] == 1
+    assert context["datasets"]["periodic_reports"]["notice_count"] == 1
+    assert (
+        context["datasets"]["financials"]["excluded_without_point_in_time_notice"]
+        == 2
+    )
+    assert (
+        context["datasets"]["distributions"][
+            "excluded_without_matched_announcement"
+        ]
+        == 2
+    )
     assert (
         context["datasets"]["financials"]["limitations"][0]
         == "DISPROFIT is not treated as AFFO"
