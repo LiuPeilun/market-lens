@@ -1,0 +1,24 @@
+{
+  "Data": [
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "关于博时招商蛇口产业园封闭式基础设施证券投资基金收益分配的公告",
+      "NEWCATEGORY": "2",
+      "PUBLISHDATE": "2026-04-15T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "DIST20260415"
+    },
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "关于博时招商蛇口产业园封闭式基础设施证券投资基金收益分配的公告",
+      "NEWCATEGORY": "2",
+      "PUBLISHDATE": "2025-12-04T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "DIST20251204"
+    }
+  ],
+  "ErrCode": 0,
+  "TotalCount": 2,
+  "PageSize": 100,
+  "PageIndex": 1
+}

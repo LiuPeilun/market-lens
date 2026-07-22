@@ -1,0 +1,48 @@
+{
+  "Data": [
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "博时招商蛇口产业园封闭式基础设施证券投资基金2025年年度报告",
+      "NEWCATEGORY": "3",
+      "PUBLISHDATE": "2026-03-28T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "ANNUAL2025"
+    },
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "博时招商蛇口产业园封闭式基础设施证券投资基金2025年第4季度报告",
+      "NEWCATEGORY": "3",
+      "PUBLISHDATE": "2026-01-22T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "Q42025"
+    },
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "博时招商蛇口产业园封闭式基础设施证券投资基金2025年中期报告",
+      "NEWCATEGORY": "3",
+      "PUBLISHDATE": "2025-08-30T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "SEMI2025"
+    },
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "博时招商蛇口产业园封闭式基础设施证券投资基金2025年第2季度报告",
+      "NEWCATEGORY": "3",
+      "PUBLISHDATE": "2025-07-21T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "Q22025"
+    },
+    {
+      "FUNDCODE": "180101",
+      "TITLE": "博时招商蛇口产业园封闭式基础设施证券投资基金2025年房地产评估报告",
+      "NEWCATEGORY": "3",
+      "PUBLISHDATE": "2026-03-14T00:00:00",
+      "ATTACHTYPE": "0",
+      "ID": "VALUATION2025"
+    }
+  ],
+  "ErrCode": 0,
+  "TotalCount": 5,
+  "PageSize": 100,
+  "PageIndex": 1
+}

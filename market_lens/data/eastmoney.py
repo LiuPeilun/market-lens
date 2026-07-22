@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import date, datetime
 from html import unescape
 from html.parser import HTMLParser
+from math import isfinite
 from typing import Any
 from urllib.parse import quote, urlencode, urlparse
 
@@ -18,15 +19,31 @@ from market_lens.storage.sqlite_cache import SQLiteCache
 from market_lens.types import (
     AssetSearchResult,
     AssetType,
+    CommodityFuturesBar,
+    CommodityHistoryPeriod,
+    CommodityMainContractKey,
+    CommodityMainContractSpec,
     FundHolding,
     FundHoldingsRoute,
     FundNavPoint,
     FundProductInfo,
     FundTrackingInfo,
+    ReitDistribution,
+    ReitFinancialSnapshot,
+    ReitHistoryPeriod,
+    ReitPeriodicReportNotice,
+    ReitPriceBar,
+    ReitProfile,
+    ReitReportKind,
+    StockBalanceSheet,
     StockBar,
+    StockCashFlowStatement,
     StockDividendPlan,
     StockDividendSummary,
+    StockFinancialCompanyType,
     StockFinancialIndicator,
+    StockFinancialReportScope,
+    StockIncomeStatement,
     StockIndustryValuationSnapshot,
     StockPeerComparison,
     StockProfile,
@@ -62,6 +79,179 @@ KNOWN_FUND_MANAGERS = (
     "长城",
     "泰康",
 )
+
+F10_FINANCIAL_COMPANY_TYPES: dict[StockFinancialCompanyType, int] = {
+    "securities": 1,
+    "insurance": 2,
+    "bank": 3,
+    "general": 4,
+}
+F10_FINANCIAL_REPORT_SCOPES: dict[StockFinancialReportScope, int] = {
+    "all": 0,
+    "annual": 1,
+}
+F10_FINANCIAL_STATEMENT_TABS = {
+    "balance_sheet": "zcfzb",
+    "income_statement": "lrb",
+    "cash_flow_statement": "xjllb",
+}
+F10_FINANCIAL_DATES_PER_REQUEST = 5
+REIT_FINANCIAL_FIELDS = (
+    "FSRQ",
+    "COMPROFIT",
+    "NETPROFIT",
+    "UNITPROFIT",
+    "NGROWTH",
+    "FNGROWTH",
+    "DISPROFIT",
+    "DIFUNTIPROFIT",
+    "ENDNAV",
+    "ENDUNITNAV",
+    "FCNGROWTH",
+)
+REIT_PERIODIC_REPORT_PATTERN = re.compile(
+    r"(20\d{2})年(年度|中期|半年度|第([一二三四1234])季度)报告$"
+)
+REIT_QUARTER_NUMBERS = {"一": 1, "二": 2, "三": 3, "四": 4}
+
+COMMODITY_MAIN_CONTRACTS: dict[CommodityMainContractKey, CommodityMainContractSpec] = {
+    "copper": CommodityMainContractSpec(
+        key="copper",
+        product_code="CU",
+        name_zh="沪铜主连",
+        exchange="SHFE",
+        quote_id="113.cum",
+        source_code="cum",
+        source_market=113,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=5.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "aluminum": CommodityMainContractSpec(
+        key="aluminum",
+        product_code="AL",
+        name_zh="沪铝主连",
+        exchange="SHFE",
+        quote_id="113.alm",
+        source_code="alm",
+        source_market=113,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=5.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "gold": CommodityMainContractSpec(
+        key="gold",
+        product_code="AU",
+        name_zh="沪金主连",
+        exchange="SHFE",
+        quote_id="113.aum",
+        source_code="aum",
+        source_market=113,
+        currency="CNY",
+        price_unit="CNY/gram",
+        contract_multiplier=1000.0,
+        contract_multiplier_unit="gram/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "rebar": CommodityMainContractSpec(
+        key="rebar",
+        product_code="RB",
+        name_zh="螺纹钢主连",
+        exchange="SHFE",
+        quote_id="113.rbm",
+        source_code="rbm",
+        source_market=113,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=10.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "hot_rolled_coil": CommodityMainContractSpec(
+        key="hot_rolled_coil",
+        product_code="HC",
+        name_zh="热卷主连",
+        exchange="SHFE",
+        quote_id="113.hcm",
+        source_code="hcm",
+        source_market=113,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=10.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "iron_ore": CommodityMainContractSpec(
+        key="iron_ore",
+        product_code="I",
+        name_zh="铁矿石主连",
+        exchange="DCE",
+        quote_id="114.im",
+        source_code="im",
+        source_market=114,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=100.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "coking_coal": CommodityMainContractSpec(
+        key="coking_coal",
+        product_code="JM",
+        name_zh="焦煤主连",
+        exchange="DCE",
+        quote_id="114.jmm",
+        source_code="jmm",
+        source_market=114,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=60.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+    "coke": CommodityMainContractSpec(
+        key="coke",
+        product_code="J",
+        name_zh="焦炭主连",
+        exchange="DCE",
+        quote_id="114.jm",
+        source_code="jm",
+        source_market=114,
+        currency="CNY",
+        price_unit="CNY/metric_ton",
+        contract_multiplier=100.0,
+        contract_multiplier_unit="metric_ton/lot",
+        series_kind="main_continuous",
+        roll_method="eastmoney_provider_defined_main_contract",
+        price_adjustment="none",
+        source="eastmoney_push2his",
+    ),
+}
 
 
 class EastmoneyClient:
@@ -112,6 +302,36 @@ class EastmoneyClient:
             return []
         klines = data.get("klines") or []
         return [parse_stock_kline(item) for item in klines]
+
+    def get_commodity_main_contract_history(
+        self,
+        commodity: CommodityMainContractKey,
+        start: date,
+        end: date,
+        period: CommodityHistoryPeriod = "daily",
+    ) -> list[CommodityFuturesBar]:
+        spec = commodity_main_contract_spec(commodity)
+        period_map = {"daily": "101", "weekly": "102", "monthly": "103"}
+        if period not in period_map:
+            raise ValueError("period must be one of: daily, weekly, monthly")
+        if start > end:
+            raise ValueError("start must be on or before end")
+
+        params = {
+            "secid": spec.quote_id,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": period_map[period],
+            "fqt": "0",
+            "beg": compact_date(start),
+            "end": compact_date(end),
+        }
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(
+            params
+        )
+        payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+        rows = validated_commodity_kline_rows(payload, spec, period=period)
+        return [row for row in rows if start <= row.date <= end]
 
     def get_stock_valuation(self, symbol: str) -> list[StockValuationPoint]:
         stock_code = normalize_symbol(symbol)
@@ -260,6 +480,117 @@ class EastmoneyClient:
             key=lambda item: item.date,
         )
 
+    def get_stock_balance_sheets(
+        self,
+        symbol: str,
+        report_scope: StockFinancialReportScope = "annual",
+        company_type: StockFinancialCompanyType = "general",
+        max_reports: int | None = 20,
+    ) -> list[StockBalanceSheet]:
+        rows = self._get_stock_financial_statement_rows(
+            symbol,
+            statement="balance_sheet",
+            report_scope=report_scope,
+            company_type=company_type,
+            max_reports=max_reports,
+        )
+        return sorted(
+            (parse_stock_balance_sheet(row) for row in rows),
+            key=lambda item: item.report_date,
+        )
+
+    def get_stock_income_statements(
+        self,
+        symbol: str,
+        report_scope: StockFinancialReportScope = "annual",
+        company_type: StockFinancialCompanyType = "general",
+        max_reports: int | None = 20,
+    ) -> list[StockIncomeStatement]:
+        rows = self._get_stock_financial_statement_rows(
+            symbol,
+            statement="income_statement",
+            report_scope=report_scope,
+            company_type=company_type,
+            max_reports=max_reports,
+        )
+        return sorted(
+            (parse_stock_income_statement(row) for row in rows),
+            key=lambda item: item.report_date,
+        )
+
+    def get_stock_cash_flow_statements(
+        self,
+        symbol: str,
+        report_scope: StockFinancialReportScope = "annual",
+        company_type: StockFinancialCompanyType = "general",
+        max_reports: int | None = 20,
+    ) -> list[StockCashFlowStatement]:
+        rows = self._get_stock_financial_statement_rows(
+            symbol,
+            statement="cash_flow_statement",
+            report_scope=report_scope,
+            company_type=company_type,
+            max_reports=max_reports,
+        )
+        return sorted(
+            (parse_stock_cash_flow_statement(row) for row in rows),
+            key=lambda item: item.report_date,
+        )
+
+    def _get_stock_financial_statement_rows(
+        self,
+        symbol: str,
+        statement: str,
+        report_scope: StockFinancialReportScope,
+        company_type: StockFinancialCompanyType,
+        max_reports: int | None,
+    ) -> list[dict[str, Any]]:
+        if statement not in F10_FINANCIAL_STATEMENT_TABS:
+            raise ValueError(f"Unsupported financial statement: {statement!r}")
+        if report_scope not in F10_FINANCIAL_REPORT_SCOPES:
+            raise ValueError(f"Unsupported financial report scope: {report_scope!r}")
+        if company_type not in F10_FINANCIAL_COMPANY_TYPES:
+            raise ValueError(f"Unsupported financial company type: {company_type!r}")
+        if max_reports is not None and max_reports <= 0:
+            raise ValueError("max_reports must be positive or None")
+
+        code = f10_stock_code(symbol)
+        tab = F10_FINANCIAL_STATEMENT_TABS[statement]
+        company_type_code = F10_FINANCIAL_COMPANY_TYPES[company_type]
+        report_date_type = F10_FINANCIAL_REPORT_SCOPES[report_scope]
+        date_params = {
+            "companyType": str(company_type_code),
+            "reportDateType": str(report_date_type),
+            "code": code,
+        }
+        date_url = (
+            f"https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/{tab}DateAjaxNew?"
+            + urlencode(date_params)
+        )
+        date_payload = self._get_json(date_url, ttl_seconds=24 * 60 * 60)
+        date_rows = validated_f10_financial_rows(date_payload, f"{statement} dates")
+        report_dates = unique_report_dates(date_rows)
+        if max_reports is not None:
+            report_dates = report_dates[:max_reports]
+
+        rows: list[dict[str, Any]] = []
+        for start in range(0, len(report_dates), F10_FINANCIAL_DATES_PER_REQUEST):
+            date_chunk = report_dates[start : start + F10_FINANCIAL_DATES_PER_REQUEST]
+            data_params = {
+                "companyType": str(company_type_code),
+                "reportDateType": str(report_date_type),
+                "reportType": "1",
+                "dates": ",".join(item.isoformat() for item in date_chunk),
+                "code": code,
+            }
+            data_url = (
+                f"https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/{tab}AjaxNew?"
+                + urlencode(data_params)
+            )
+            payload = self._get_json(data_url, ttl_seconds=24 * 60 * 60)
+            rows.extend(validated_f10_financial_rows(payload, statement))
+        return deduplicate_financial_statement_rows(rows)
+
     def get_stock_peer_comparison(self, symbol: str) -> dict[str, list[StockPeerComparison]]:
         code = f10_stock_code(symbol)
         url = (
@@ -352,6 +683,154 @@ class EastmoneyClient:
     def get_fund_product_info(self, code: str) -> FundProductInfo:
         normalized_code = normalize_fund_code(code)
         return parse_fund_product_info(self._get_fund_detail_payload(normalized_code))
+
+    def get_reit_profile(self, code: str) -> ReitProfile:
+        normalized_code = normalize_fund_code(code)
+        payload = self._get_fund_detail_payload(normalized_code)
+        return parse_reit_profile(payload, expected_code=normalized_code)
+
+    def get_reit_price_history(
+        self,
+        code: str,
+        start: date,
+        end: date,
+        period: ReitHistoryPeriod = "daily",
+    ) -> list[ReitPriceBar]:
+        period_map = {"daily": "101", "weekly": "102", "monthly": "103"}
+        if period not in period_map:
+            raise ValueError("period must be one of: daily, weekly, monthly")
+        if start > end:
+            raise ValueError("start must be on or before end")
+
+        profile = self.get_reit_profile(code)
+        params = {
+            "secid": profile.quote_id,
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": period_map[period],
+            "fqt": "0",
+            "beg": compact_date(start),
+            "end": compact_date(end),
+        }
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(
+            params
+        )
+        payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+        rows = validated_reit_kline_rows(payload, profile, period=period)
+        return [row for row in rows if start <= row.date <= end]
+
+    def get_reit_notices(self, code: str) -> list[ReitPeriodicReportNotice]:
+        profile = self.get_reit_profile(code)
+        rows = self._get_reit_announcement_rows(profile.fund_code, category="3")
+        return sorted(
+            (parse_reit_periodic_report_notice(row) for row in rows),
+            key=lambda item: (item.publish_date, item.announcement_id),
+        )
+
+    def get_reit_financials(self, code: str) -> list[ReitFinancialSnapshot]:
+        profile = self.get_reit_profile(code)
+        normalized_code = profile.fund_code
+        base_params = {
+            "fundcode": normalized_code,
+            "showtype": "0",
+            "year": "",
+        }
+        base_url = "https://api.fund.eastmoney.com/f10/GetArrayCwzb?" + urlencode(
+            base_params
+        )
+        first_payload = self._get_json(base_url, ttl_seconds=24 * 60 * 60)
+        first_rows, years, response_year = validated_reit_financial_payload(
+            first_payload
+        )
+
+        raw_rows = list(first_rows)
+        for year in years:
+            if year == response_year:
+                continue
+            params = base_params | {"year": str(year)}
+            url = "https://api.fund.eastmoney.com/f10/GetArrayCwzb?" + urlencode(params)
+            payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+            rows, returned_years, returned_year = validated_reit_financial_payload(
+                payload
+            )
+            if returned_year != year or returned_years != years:
+                raise EastmoneyError(
+                    f"Eastmoney REIT financial year route mismatch for {year}"
+                )
+            raw_rows.extend(rows)
+
+        notices = [
+            parse_reit_periodic_report_notice(row)
+            for row in self._get_reit_announcement_rows(
+                normalized_code,
+                category="3",
+            )
+        ]
+        snapshots: list[ReitFinancialSnapshot] = []
+        for row in deduplicate_reit_financial_rows(raw_rows):
+            report_date = parse_date(str(row["FSRQ"]))
+            notice = select_reit_financial_notice(report_date, notices)
+            snapshots.append(
+                parse_reit_financial_snapshot(
+                    normalized_code,
+                    row,
+                    notice=notice,
+                )
+            )
+        return sorted(snapshots, key=lambda item: item.report_date)
+
+    def get_reit_distributions(self, code: str) -> list[ReitDistribution]:
+        profile = self.get_reit_profile(code)
+        normalized_code = profile.fund_code
+        url = f"https://fundf10.eastmoney.com/fhsp_{normalized_code}.html"
+        text = self._get_text(url, ttl_seconds=24 * 60 * 60)
+        distributions = parse_reit_distribution_table(normalized_code, text)
+        announcement_rows = self._get_reit_announcement_rows(
+            normalized_code,
+            category="2",
+        )
+        return match_reit_distribution_announcements(distributions, announcement_rows)
+
+    def _get_reit_announcement_rows(
+        self,
+        normalized_code: str,
+        category: str,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        if category not in {"2", "3"}:
+            raise ValueError("REIT announcement category must be 2 or 3")
+        if not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+
+        def fetch_page(page: int) -> tuple[list[dict[str, Any]], int, int]:
+            params = {
+                "fundcode": normalized_code,
+                "pageIndex": str(page),
+                "pageSize": str(page_size),
+                "type": category,
+            }
+            url = "https://api.fund.eastmoney.com/f10/JJGG?" + urlencode(params)
+            payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+            return validated_reit_announcement_page(
+                payload,
+                expected_code=normalized_code,
+                expected_category=category,
+                expected_page=page,
+            )
+
+        first_rows, total_count, response_page_size = fetch_page(1)
+        pages = max(1, (total_count + response_page_size - 1) // response_page_size)
+        if pages > 100:
+            raise EastmoneyError(
+                f"Unexpected REIT announcement pagination for {normalized_code}: {pages}"
+            )
+        rows = list(first_rows)
+        for page in range(2, pages + 1):
+            page_rows, page_total, page_response_size = fetch_page(page)
+            if page_total != total_count or page_response_size != response_page_size:
+                raise EastmoneyError("REIT announcement pagination changed during request")
+            rows.extend(page_rows)
+        return deduplicate_reit_announcement_rows(rows)
 
     def _get_fund_detail_payload(self, normalized_code: str) -> dict[str, Any]:
         detail_url = (
@@ -851,6 +1330,54 @@ def infer_exchange_fund_secid(code: str) -> str | None:
     return None
 
 
+def parse_reit_profile(
+    payload: dict[str, Any],
+    expected_code: str,
+) -> ReitProfile:
+    data = payload.get("Datas")
+    if payload.get("ErrCode") != 0 or not isinstance(data, dict):
+        raise EastmoneyError(f"Unexpected Eastmoney REIT profile for {expected_code}")
+
+    fund_code = str(data.get("FCODE") or "").strip()
+    fund_type = str(data.get("FTYPE") or "").strip()
+    fund_name = repair_mojibake(str(data.get("SHORTNAME") or "").strip()) or ""
+    full_name = repair_mojibake(str(data.get("FULLNAME") or "").strip()) or ""
+    if fund_code != expected_code:
+        raise EastmoneyError(
+            f"Eastmoney REIT profile route mismatch: expected {expected_code}, got {fund_code}"
+        )
+    if fund_type.casefold() != "reits":
+        raise EastmoneyError(f"Fund {expected_code} is not an Eastmoney REIT")
+    if not fund_name or not full_name:
+        raise EastmoneyError(f"Eastmoney REIT profile has no valid name for {expected_code}")
+
+    quote_id = infer_exchange_fund_secid(fund_code)
+    if quote_id is None:
+        raise EastmoneyError(f"REIT {expected_code} has no supported exchange route")
+    exchange = "SSE" if quote_id.startswith("1.") else "SZSE"
+    period_end_net_assets = reit_optional_float(
+        data.get("ENDNAV"),
+        "profile period-end net assets",
+    )
+    if period_end_net_assets is not None and period_end_net_assets <= 0:
+        raise EastmoneyError("Eastmoney REIT profile has invalid period-end net assets")
+
+    return ReitProfile(
+        fund_code=fund_code,
+        fund_name=fund_name,
+        full_name=full_name,
+        fund_type=fund_type,
+        establishment_date=parse_optional_date(data.get("ESTABDATE")),
+        term_text=optional_source_text(data.get("CYCLE")),
+        scale_report_date=parse_optional_date(data.get("FEGMRQ")),
+        period_end_net_assets_cny=period_end_net_assets,
+        exchange=exchange,
+        quote_id=quote_id,
+        source="eastmoney_fund_mobile",
+        raw=data,
+    )
+
+
 def is_a_share_symbol(symbol: str) -> bool:
     code = normalize_symbol(symbol)
     return code.startswith(
@@ -941,6 +1468,442 @@ def parse_stock_kline(item: str) -> StockBar:
     )
 
 
+def commodity_main_contract_spec(
+    commodity: CommodityMainContractKey,
+) -> CommodityMainContractSpec:
+    try:
+        return COMMODITY_MAIN_CONTRACTS[commodity]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported commodity main contract: {commodity!r}") from exc
+
+
+def parse_commodity_kline(
+    item: str,
+    spec: CommodityMainContractSpec,
+    period: CommodityHistoryPeriod = "daily",
+) -> CommodityFuturesBar:
+    fields = item.split(",")
+    if len(fields) < 11:
+        raise EastmoneyError(f"Unexpected commodity kline row: {item}")
+    try:
+        bar_date = parse_date(fields[0])
+    except ValueError as exc:
+        raise EastmoneyError(f"Unexpected commodity kline date: {fields[0]!r}") from exc
+
+    open_price = required_finite_float(fields[1], "open", item)
+    close_price = required_finite_float(fields[2], "close", item)
+    high_price = required_finite_float(fields[3], "high", item)
+    low_price = required_finite_float(fields[4], "low", item)
+    volume_lots = required_finite_float(fields[5], "volume", item)
+    if min(open_price, close_price, high_price, low_price) <= 0 or volume_lots < 0:
+        raise EastmoneyError(f"Invalid commodity kline price or volume: {item}")
+
+    return CommodityFuturesBar(
+        key=spec.key,
+        quote_id=spec.quote_id,
+        period=period,
+        date=bar_date,
+        open=open_price,
+        close=close_price,
+        high=high_price,
+        low=low_price,
+        volume_lots=volume_lots,
+        amount_cny=optional_finite_float(fields[6], "amount", item),
+        amplitude_pct=optional_finite_float(fields[7], "amplitude", item),
+        change_pct=optional_finite_float(fields[8], "change_pct", item),
+        change_amount=optional_finite_float(fields[9], "change_amount", item),
+        is_complete=None,
+        source=spec.source,
+    )
+
+
+def validated_commodity_kline_rows(
+    payload: dict[str, Any],
+    spec: CommodityMainContractSpec,
+    period: CommodityHistoryPeriod = "daily",
+) -> list[CommodityFuturesBar]:
+    data = payload.get("data")
+    if data is None:
+        return []
+    if not isinstance(data, dict):
+        raise EastmoneyError("Unexpected Eastmoney commodity kline response")
+
+    source_code = str(data.get("code") or "").strip().lower()
+    source_name = repair_mojibake(str(data.get("name") or "").strip())
+    try:
+        source_market = int(data.get("market"))
+    except (TypeError, ValueError) as exc:
+        raise EastmoneyError("Eastmoney commodity response has no valid market") from exc
+    if (
+        source_code != spec.source_code
+        or source_market != spec.source_market
+        or source_name != spec.name_zh
+    ):
+        raise EastmoneyError(
+            "Eastmoney commodity route mismatch: "
+            f"expected {spec.quote_id} {spec.name_zh}, got "
+            f"{source_market}.{source_code} {source_name or '<missing>'}"
+        )
+
+    klines = data.get("klines")
+    if not isinstance(klines, list) or any(not isinstance(row, str) for row in klines):
+        raise EastmoneyError("Unexpected Eastmoney commodity kline rows")
+    rows = [parse_commodity_kline(item, spec, period=period) for item in klines]
+    dates = [item.date for item in rows]
+    if len(dates) != len(set(dates)):
+        raise EastmoneyError("Eastmoney commodity kline response has duplicate dates")
+    return sorted(rows, key=lambda item: item.date)
+
+
+def required_finite_float(value: Any, field: str, row: str) -> float:
+    parsed = to_float(value)
+    if parsed is None or not isfinite(parsed):
+        raise EastmoneyError(f"Invalid commodity kline {field}: {row}")
+    return parsed
+
+
+def optional_finite_float(value: Any, field: str, row: str) -> float | None:
+    parsed = to_float(value)
+    if parsed is not None and not isfinite(parsed):
+        raise EastmoneyError(f"Invalid commodity kline {field}: {row}")
+    return parsed
+
+
+def optional_source_text(value: Any) -> str | None:
+    text = repair_mojibake(str(value or "").strip()) or ""
+    return None if text in {"", "-", "--", "---"} else text
+
+
+def reit_optional_float(value: Any, context: str) -> float | None:
+    parsed = to_float(value)
+    if parsed is not None and not isfinite(parsed):
+        raise EastmoneyError(f"Invalid Eastmoney REIT {context}: {value!r}")
+    return parsed
+
+
+def parse_reit_kline(
+    item: str,
+    profile: ReitProfile,
+    period: ReitHistoryPeriod = "daily",
+) -> ReitPriceBar:
+    fields = item.split(",")
+    if len(fields) < 11:
+        raise EastmoneyError(f"Unexpected REIT kline row: {item}")
+    try:
+        bar_date = parse_date(fields[0])
+    except ValueError as exc:
+        raise EastmoneyError(f"Unexpected REIT kline date: {fields[0]!r}") from exc
+
+    prices = [
+        reit_optional_float(fields[index], f"kline {field}")
+        for index, field in zip(range(1, 5), ("open", "close", "high", "low"), strict=True)
+    ]
+    if any(value is None or value <= 0 for value in prices):
+        raise EastmoneyError(f"Invalid REIT kline price: {item}")
+    open_price, close_price, high_price, low_price = prices
+    volume = reit_optional_float(fields[5], "kline volume")
+    if volume is None or volume < 0:
+        raise EastmoneyError(f"Invalid REIT kline volume: {item}")
+
+    return ReitPriceBar(
+        fund_code=profile.fund_code,
+        fund_name=profile.fund_name,
+        exchange=profile.exchange,
+        quote_id=profile.quote_id,
+        period=period,
+        date=bar_date,
+        open=open_price,
+        close=close_price,
+        high=high_price,
+        low=low_price,
+        volume=volume,
+        amount_cny=reit_optional_float(fields[6], "kline amount"),
+        amplitude_pct=reit_optional_float(fields[7], "kline amplitude"),
+        change_pct=reit_optional_float(fields[8], "kline change percentage"),
+        change_amount=reit_optional_float(fields[9], "kline change amount"),
+        turnover_pct=reit_optional_float(fields[10], "kline turnover"),
+        is_complete=None,
+        source="eastmoney_push2his",
+    )
+
+
+def validated_reit_kline_rows(
+    payload: dict[str, Any],
+    profile: ReitProfile,
+    period: ReitHistoryPeriod = "daily",
+) -> list[ReitPriceBar]:
+    data = payload.get("data")
+    if data is None:
+        return []
+    if not isinstance(data, dict):
+        raise EastmoneyError("Unexpected Eastmoney REIT kline response")
+
+    source_code = str(data.get("code") or "").strip()
+    source_name = repair_mojibake(str(data.get("name") or "").strip()) or ""
+    try:
+        source_market = int(data.get("market"))
+        expected_market = int(profile.quote_id.partition(".")[0])
+    except (TypeError, ValueError) as exc:
+        raise EastmoneyError("Eastmoney REIT response has no valid market") from exc
+    if (
+        source_code != profile.fund_code
+        or source_market != expected_market
+        or source_name != profile.fund_name
+    ):
+        raise EastmoneyError(
+            "Eastmoney REIT price route mismatch: "
+            f"expected {profile.quote_id} {profile.fund_name}, got "
+            f"{source_market}.{source_code} {source_name or '<missing>'}"
+        )
+
+    klines = data.get("klines")
+    if not isinstance(klines, list) or any(not isinstance(row, str) for row in klines):
+        raise EastmoneyError("Unexpected Eastmoney REIT kline rows")
+    rows = [parse_reit_kline(item, profile, period=period) for item in klines]
+    dates = [item.date for item in rows]
+    if len(dates) != len(set(dates)):
+        raise EastmoneyError("Eastmoney REIT kline response has duplicate dates")
+    return sorted(rows, key=lambda item: item.date)
+
+
+def validated_reit_financial_payload(
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], tuple[int, ...], int]:
+    outer = payload.get("Data")
+    if payload.get("ErrCode") != 0 or not isinstance(outer, dict):
+        raise EastmoneyError("Unexpected Eastmoney REIT financial response")
+    data = outer.get("data")
+    raw_years = outer.get("years")
+    if not isinstance(data, dict) or not isinstance(raw_years, list):
+        raise EastmoneyError("Unexpected Eastmoney REIT financial data")
+
+    arrays: dict[str, list[Any]] = {}
+    for field_name in REIT_FINANCIAL_FIELDS:
+        values = data.get(field_name)
+        if not isinstance(values, list):
+            raise EastmoneyError(
+                f"Eastmoney REIT financial field {field_name} is not an array"
+            )
+        arrays[field_name] = values
+    row_count = len(arrays["FSRQ"])
+    if any(len(values) != row_count for values in arrays.values()):
+        raise EastmoneyError("Eastmoney REIT financial arrays have unequal lengths")
+
+    try:
+        years = tuple(int(value) for value in raw_years)
+        response_year = int(outer.get("year"))
+    except (TypeError, ValueError) as exc:
+        raise EastmoneyError("Eastmoney REIT financial response has invalid years") from exc
+    if len(years) != len(set(years)) or tuple(sorted(years, reverse=True)) != years:
+        raise EastmoneyError("Eastmoney REIT financial years are not unique descending years")
+    if response_year not in years:
+        raise EastmoneyError("Eastmoney REIT financial response year is not advertised")
+
+    rows: list[dict[str, Any]] = []
+    for index in range(row_count):
+        row = {field_name: values[index] for field_name, values in arrays.items()}
+        if parse_optional_date(row["FSRQ"]) is None:
+            raise EastmoneyError("Eastmoney REIT financial row has no valid report date")
+        rows.append(row)
+    return rows, years, response_year
+
+
+def normalized_reit_financial_values(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        parse_date(str(row["FSRQ"])),
+        *(
+            reit_optional_float(row.get(field), f"financial {field}")
+            for field in REIT_FINANCIAL_FIELDS[1:]
+        ),
+    )
+
+
+def deduplicate_reit_financial_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_date: dict[date, dict[str, Any]] = {}
+    for row in rows:
+        report_date = parse_optional_date(row.get("FSRQ"))
+        if report_date is None:
+            raise EastmoneyError("Eastmoney REIT financial row has no valid report date")
+        existing = by_date.get(report_date)
+        if existing is not None:
+            if normalized_reit_financial_values(existing) != normalized_reit_financial_values(
+                row
+            ):
+                raise EastmoneyError(
+                    f"Conflicting Eastmoney REIT financial values for {report_date}"
+                )
+            continue
+        by_date[report_date] = row
+    return [by_date[report_date] for report_date in sorted(by_date)]
+
+
+def parse_reit_periodic_report_notice(
+    row: dict[str, Any],
+) -> ReitPeriodicReportNotice:
+    fund_code = str(row.get("FUNDCODE") or "").strip()
+    title = repair_mojibake(str(row.get("TITLE") or "").strip()) or ""
+    category = str(row.get("NEWCATEGORY") or "").strip()
+    publish_date = parse_optional_date(row.get("PUBLISHDATE"))
+    announcement_id = str(row.get("ID") or "").strip()
+    if not fund_code or not title or publish_date is None or not announcement_id:
+        raise EastmoneyError("Unexpected Eastmoney REIT periodic report notice")
+    report_date, report_kind = infer_reit_report_period(title)
+    return ReitPeriodicReportNotice(
+        fund_code=fund_code,
+        title=title,
+        category=category,
+        publish_date=publish_date,
+        attachment_type=optional_source_text(row.get("ATTACHTYPE")),
+        announcement_id=announcement_id,
+        attachment_url=f"https://pdf.dfcfw.com/pdf/H2_{announcement_id}_1.pdf",
+        report_date=report_date,
+        report_kind=report_kind,
+        is_canonical=report_date is not None and report_kind is not None,
+        source="eastmoney_fund_announcement",
+        raw=row,
+    )
+
+
+def infer_reit_report_period(
+    title: str,
+) -> tuple[date | None, ReitReportKind | None]:
+    match = REIT_PERIODIC_REPORT_PATTERN.search(title.strip())
+    if match is None:
+        return None, None
+    year = int(match.group(1))
+    label = match.group(2)
+    if label == "年度":
+        return date(year, 12, 31), "annual"
+    if label in {"中期", "半年度"}:
+        return date(year, 6, 30), "semiannual"
+    quarter_text = match.group(3)
+    quarter = REIT_QUARTER_NUMBERS.get(quarter_text, None)
+    if quarter is None and quarter_text and quarter_text.isdigit():
+        quarter = int(quarter_text)
+    quarter_values: dict[int, tuple[date, ReitReportKind]] = {
+        1: (date(year, 3, 31), "q1"),
+        2: (date(year, 6, 30), "q2"),
+        3: (date(year, 9, 30), "q3"),
+        4: (date(year, 12, 31), "q4"),
+    }
+    return quarter_values.get(quarter, (None, None))
+
+
+def select_reit_financial_notice(
+    report_date: date,
+    notices: list[ReitPeriodicReportNotice],
+) -> ReitPeriodicReportNotice | None:
+    preferred_kinds: dict[tuple[int, int], tuple[ReitReportKind, ...]] = {
+        (12, 31): ("annual", "q4"),
+        (6, 30): ("semiannual", "q2"),
+        (3, 31): ("q1",),
+        (9, 30): ("q3",),
+    }
+    kinds = preferred_kinds.get((report_date.month, report_date.day), ())
+    candidates = [
+        notice
+        for notice in notices
+        if notice.is_canonical and notice.report_date == report_date
+    ]
+    for kind in kinds:
+        matching = [notice for notice in candidates if notice.report_kind == kind]
+        if matching:
+            return max(matching, key=lambda item: (item.publish_date, item.announcement_id))
+    return None
+
+
+def parse_reit_financial_snapshot(
+    fund_code: str,
+    row: dict[str, Any],
+    notice: ReitPeriodicReportNotice | None,
+) -> ReitFinancialSnapshot:
+    report_date = parse_date(str(row["FSRQ"]))
+    return ReitFinancialSnapshot(
+        fund_code=fund_code,
+        report_date=report_date,
+        report_kind=notice.report_kind if notice else None,
+        notice_date=notice.publish_date if notice else None,
+        realized_income_cny=reit_optional_float(row.get("COMPROFIT"), "realized income"),
+        net_profit_cny=reit_optional_float(row.get("NETPROFIT"), "net profit"),
+        unit_profit_cny=reit_optional_float(row.get("UNITPROFIT"), "unit profit"),
+        net_asset_growth_pct=reit_optional_float(row.get("NGROWTH"), "net asset growth"),
+        fund_net_asset_growth_pct=reit_optional_float(
+            row.get("FNGROWTH"),
+            "fund net asset growth",
+        ),
+        distributable_profit_cny=reit_optional_float(
+            row.get("DISPROFIT"),
+            "distributable profit",
+        ),
+        distributable_profit_per_unit_cny=reit_optional_float(
+            row.get("DIFUNTIPROFIT"),
+            "distributable profit per unit",
+        ),
+        period_end_net_assets_cny=reit_optional_float(
+            row.get("ENDNAV"),
+            "period-end net assets",
+        ),
+        period_end_unit_nav_cny=reit_optional_float(
+            row.get("ENDUNITNAV"),
+            "period-end unit NAV",
+        ),
+        fund_share_nav_growth_pct=reit_optional_float(
+            row.get("FCNGROWTH"),
+            "fund share NAV growth",
+        ),
+        point_in_time_eligible=notice is not None,
+        source="eastmoney_fund_financial",
+        raw=row,
+    )
+
+
+def validated_reit_announcement_page(
+    payload: dict[str, Any],
+    expected_code: str,
+    expected_category: str,
+    expected_page: int,
+) -> tuple[list[dict[str, Any]], int, int]:
+    rows = payload.get("Data")
+    if payload.get("ErrCode") != 0 or not isinstance(rows, list):
+        raise EastmoneyError("Unexpected Eastmoney REIT announcement response")
+    if any(not isinstance(row, dict) for row in rows):
+        raise EastmoneyError("Unexpected Eastmoney REIT announcement rows")
+    try:
+        total_count = int(payload.get("TotalCount"))
+        page_size = int(payload.get("PageSize"))
+        page_index = int(payload.get("PageIndex"))
+    except (TypeError, ValueError) as exc:
+        raise EastmoneyError("Invalid Eastmoney REIT announcement pagination") from exc
+    if total_count < len(rows) or page_size <= 0 or page_index != expected_page:
+        raise EastmoneyError("Invalid Eastmoney REIT announcement pagination")
+    for row in rows:
+        if (
+            str(row.get("FUNDCODE") or "").strip() != expected_code
+            or str(row.get("NEWCATEGORY") or "").strip() != expected_category
+        ):
+            raise EastmoneyError("Eastmoney REIT announcement route mismatch")
+    return rows, total_count, page_size
+
+
+def deduplicate_reit_announcement_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        announcement_id = str(row.get("ID") or "").strip()
+        if not announcement_id:
+            raise EastmoneyError("Eastmoney REIT announcement has no ID")
+        existing = by_id.get(announcement_id)
+        if existing is not None and existing != row:
+            raise EastmoneyError(
+                f"Conflicting Eastmoney REIT announcement {announcement_id}"
+            )
+        by_id[announcement_id] = row
+    return list(by_id.values())
+
+
 def parse_stock_valuation_row(row: dict[str, Any]) -> StockValuationPoint:
     return StockValuationPoint(
         date=parse_date(str(row["TRADE_DATE"])),
@@ -1007,6 +1970,119 @@ def parse_stock_financial_indicator(row: dict[str, Any]) -> StockFinancialIndica
         net_assets_cny=to_float(row.get("JZC")),
         raw=row,
     )
+
+
+def financial_statement_common_fields(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "code": str(row.get("SECURITY_CODE") or ""),
+        "report_date": parse_date(str(row["REPORT_DATE"])),
+        "report_type": repair_mojibake(row.get("REPORT_TYPE")),
+        "report_name": repair_mojibake(row.get("REPORT_DATE_NAME")),
+        "notice_date": parse_optional_date(row.get("NOTICE_DATE")),
+        "source_updated_at": parse_optional_date(row.get("UPDATE_DATE")),
+        "currency": repair_mojibake(row.get("CURRENCY")),
+        "org_type": repair_mojibake(row.get("ORG_TYPE")),
+        "raw": row,
+    }
+
+
+def parse_stock_balance_sheet(row: dict[str, Any]) -> StockBalanceSheet:
+    return StockBalanceSheet(
+        **financial_statement_common_fields(row),
+        total_assets_cny=to_float(row.get("TOTAL_ASSETS")),
+        total_current_assets_cny=to_float(row.get("TOTAL_CURRENT_ASSETS")),
+        monetary_funds_cny=to_float(row.get("MONETARYFUNDS")),
+        accounts_receivable_cny=to_float(row.get("ACCOUNTS_RECE")),
+        inventory_cny=to_float(row.get("INVENTORY")),
+        contract_asset_cny=to_float(row.get("CONTRACT_ASSET")),
+        total_liabilities_cny=to_float(row.get("TOTAL_LIABILITIES")),
+        total_current_liabilities_cny=to_float(row.get("TOTAL_CURRENT_LIAB")),
+        accounts_payable_cny=to_float(row.get("ACCOUNTS_PAYABLE")),
+        contract_liability_cny=to_float(row.get("CONTRACT_LIAB")),
+        short_term_borrowings_cny=to_float(row.get("SHORT_LOAN")),
+        current_portion_noncurrent_liabilities_cny=to_float(
+            row.get("NONCURRENT_LIAB_1YEAR")
+        ),
+        long_term_borrowings_cny=to_float(row.get("LONG_LOAN")),
+        bonds_payable_cny=to_float(row.get("BOND_PAYABLE")),
+        total_equity_cny=to_float(row.get("TOTAL_EQUITY")),
+    )
+
+
+def parse_stock_income_statement(row: dict[str, Any]) -> StockIncomeStatement:
+    return StockIncomeStatement(
+        **financial_statement_common_fields(row),
+        total_operating_revenue_cny=to_float(row.get("TOTAL_OPERATE_INCOME")),
+        operating_cost_cny=to_float(row.get("OPERATE_COST")),
+        sales_expense_cny=to_float(row.get("SALE_EXPENSE")),
+        management_expense_cny=to_float(row.get("MANAGE_EXPENSE")),
+        finance_expense_cny=to_float(row.get("FINANCE_EXPENSE")),
+        research_expense_cny=to_float(row.get("RESEARCH_EXPENSE")),
+        development_expense_cny=to_float(row.get("DEVELOP_EXPENSE")),
+        operating_profit_cny=to_float(row.get("OPERATE_PROFIT")),
+        parent_net_profit_cny=to_float(row.get("PARENT_NETPROFIT")),
+        deducted_parent_net_profit_cny=to_float(row.get("DEDUCT_PARENT_NETPROFIT")),
+        income_tax_cny=to_float(row.get("INCOME_TAX")),
+        total_operating_revenue_yoy_pct=to_float(row.get("TOTAL_OPERATE_INCOME_YOY")),
+        research_expense_yoy_pct=to_float(row.get("RESEARCH_EXPENSE_YOY")),
+        parent_net_profit_yoy_pct=to_float(row.get("PARENT_NETPROFIT_YOY")),
+    )
+
+
+def parse_stock_cash_flow_statement(row: dict[str, Any]) -> StockCashFlowStatement:
+    return StockCashFlowStatement(
+        **financial_statement_common_fields(row),
+        sales_services_cash_cny=to_float(row.get("SALES_SERVICES")),
+        cash_paid_to_staff_cny=to_float(row.get("PAY_STAFF_CASH")),
+        net_operating_cash_flow_cny=to_float(row.get("NETCASH_OPERATE")),
+        capital_expenditure_cash_cny=to_float(row.get("CONSTRUCT_LONG_ASSET")),
+        investment_cash_paid_cny=to_float(row.get("INVEST_PAY_CASH")),
+        net_investing_cash_flow_cny=to_float(row.get("NETCASH_INVEST")),
+        borrowings_received_cash_cny=to_float(row.get("RECEIVE_LOAN_CASH")),
+        debt_repaid_cash_cny=to_float(row.get("PAY_DEBT_CASH")),
+        dividends_interest_paid_cash_cny=to_float(row.get("ASSIGN_DIVIDEND_PORFIT")),
+        net_financing_cash_flow_cny=to_float(row.get("NETCASH_FINANCE")),
+        cash_equivalents_increase_cny=to_float(row.get("CCE_ADD")),
+        ending_cash_cny=to_float(row.get("END_CASH")),
+    )
+
+
+def validated_f10_financial_rows(
+    payload: dict[str, Any],
+    context: str,
+) -> list[dict[str, Any]]:
+    rows = payload.get("data")
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise EastmoneyError(f"Unexpected Eastmoney F10 {context} response")
+    return rows
+
+
+def unique_report_dates(rows: list[dict[str, Any]]) -> list[date]:
+    dates = {
+        parsed
+        for row in rows
+        if (parsed := parse_optional_date(row.get("REPORT_DATE"))) is not None
+    }
+    return sorted(dates, reverse=True)
+
+
+def deduplicate_financial_statement_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_date: dict[date, dict[str, Any]] = {}
+    for row in rows:
+        report_date = parse_optional_date(row.get("REPORT_DATE"))
+        if report_date is None:
+            raise EastmoneyError("Eastmoney F10 financial statement row has no report date")
+        existing = by_date.get(report_date)
+        if existing is None:
+            by_date[report_date] = row
+            continue
+        existing_notice = parse_optional_date(existing.get("NOTICE_DATE")) or date.min
+        candidate_notice = parse_optional_date(row.get("NOTICE_DATE")) or date.min
+        if candidate_notice >= existing_notice:
+            by_date[report_date] = row
+    return [by_date[report_date] for report_date in sorted(by_date)]
 
 
 def parse_stock_peer_comparison(row: dict[str, Any]) -> StockPeerComparison | None:
@@ -1447,6 +2523,113 @@ def parse_fund_nav_row(row: Any) -> FundNavPoint | None:
     )
 
 
+def parse_reit_distribution_table(
+    fund_code: str,
+    html: str,
+) -> list[ReitDistribution]:
+    parser = ReitDistributionHTMLParser.parse(html)
+    if not parser.found_target_table:
+        raise EastmoneyError("Eastmoney REIT distribution table was not found")
+
+    distributions: list[ReitDistribution] = []
+    for cells in parser.rows:
+        if len(cells) != 5:
+            raise EastmoneyError(f"Unexpected REIT distribution row: {cells!r}")
+        year_match = re.fullmatch(r"(20\d{2})年", cells[0])
+        cash_match = re.fullmatch(r"每份派现金([0-9]+(?:\.[0-9]+)?)元", cells[3])
+        if year_match is None or cash_match is None:
+            raise EastmoneyError(f"Unexpected REIT distribution row: {cells!r}")
+        cash_per_unit = reit_optional_float(cash_match.group(1), "cash per unit")
+        if cash_per_unit is None or cash_per_unit <= 0:
+            raise EastmoneyError(f"Invalid REIT distribution cash amount: {cells!r}")
+
+        record_date = parse_reit_table_date(cells[1], "record date")
+        ex_dividend_date = parse_reit_table_date(cells[2], "ex-dividend date")
+        payment_date = parse_reit_table_date(cells[4], "payment date")
+        distributions.append(
+            ReitDistribution(
+                fund_code=fund_code,
+                year=int(year_match.group(1)),
+                record_date=record_date,
+                ex_dividend_date=ex_dividend_date,
+                cash_per_unit_cny=cash_per_unit,
+                payment_date=payment_date,
+                announcement_date=None,
+                available_date=None,
+                point_in_time_eligible=False,
+                source="eastmoney_fund_distribution",
+                raw_row=tuple(cells),
+            )
+        )
+    dates = [item.ex_dividend_date for item in distributions if item.ex_dividend_date]
+    if len(dates) != len(set(dates)):
+        raise EastmoneyError("Eastmoney REIT distribution table has duplicate ex-dates")
+    return sorted(
+        distributions,
+        key=lambda item: item.ex_dividend_date or date.min,
+    )
+
+
+def parse_reit_table_date(value: str, context: str) -> date | None:
+    normalized = value.strip()
+    if normalized in {"", "-", "--", "---"}:
+        return None
+    parsed = parse_optional_date(normalized)
+    if parsed is None or parsed.isoformat() != normalized:
+        raise EastmoneyError(f"Invalid REIT distribution {context}: {value!r}")
+    return parsed
+
+
+def match_reit_distribution_announcements(
+    distributions: list[ReitDistribution],
+    announcement_rows: list[dict[str, Any]],
+) -> list[ReitDistribution]:
+    candidates: list[tuple[str, date]] = []
+    for row in announcement_rows:
+        title = repair_mojibake(str(row.get("TITLE") or "")) or ""
+        publish_date = parse_optional_date(row.get("PUBLISHDATE"))
+        announcement_id = str(row.get("ID") or "").strip()
+        if "收益分配" in title and publish_date is not None and announcement_id:
+            candidates.append((announcement_id, publish_date))
+
+    used_ids: set[str] = set()
+    matched: list[ReitDistribution] = []
+    for distribution in sorted(
+        distributions,
+        key=lambda item: item.ex_dividend_date or date.min,
+    ):
+        ex_date = distribution.ex_dividend_date
+        if ex_date is None:
+            matched.append(distribution)
+            continue
+        eligible = [
+            candidate
+            for candidate in candidates
+            if candidate[0] not in used_ids
+            and candidate[1] <= ex_date
+            and (ex_date - candidate[1]).days <= 30
+        ]
+        if not eligible:
+            matched.append(distribution)
+            continue
+        latest_date = max(candidate[1] for candidate in eligible)
+        nearest = [candidate for candidate in eligible if candidate[1] == latest_date]
+        if len(nearest) != 1:
+            matched.append(distribution)
+            continue
+        announcement_id, announcement_date = nearest[0]
+        used_ids.add(announcement_id)
+        matched.append(
+            replace(
+                distribution,
+                announcement_date=announcement_date,
+                available_date=max(announcement_date, ex_date),
+                point_in_time_eligible=True,
+            )
+        )
+    return matched
+
+
 class FundNavHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -1480,6 +2663,60 @@ class FundNavHTMLParser(HTMLParser):
             self._in_td = False
         elif tag == "tr" and self._current_row:
             self.rows.append(self._current_row)
+
+
+class ReitDistributionHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._target_table_depth = 0
+        self._in_td = False
+        self._current_cell: list[str] = []
+        self._current_row: list[str] = []
+        self.rows: list[list[str]] = []
+        self.found_target_table = False
+
+    @classmethod
+    def parse(cls, html: str) -> ReitDistributionHTMLParser:
+        parser = cls()
+        parser.feed(html)
+        return parser
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag == "table":
+            if self._target_table_depth:
+                self._target_table_depth += 1
+            elif "cfxq" in classes:
+                self._target_table_depth = 1
+                self.found_target_table = True
+            return
+        if not self._target_table_depth:
+            return
+        if tag == "tr":
+            self._current_row = []
+        elif tag == "td":
+            self._in_td = True
+            self._current_cell = []
+
+    def handle_data(self, data: str) -> None:
+        if self._target_table_depth and self._in_td:
+            self._current_cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if not self._target_table_depth:
+            return
+        if tag == "td" and self._in_td:
+            self._current_row.append("".join(self._current_cell).strip())
+            self._current_cell = []
+            self._in_td = False
+        elif tag == "tr" and self._current_row:
+            self.rows.append(self._current_row)
+            self._current_row = []
+        elif tag == "table":
+            self._target_table_depth -= 1
 
 
 class FundHoldingsHTMLParser(HTMLParser):
