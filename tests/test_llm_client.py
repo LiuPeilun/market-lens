@@ -176,3 +176,49 @@ def test_compact_analysis_keeps_factor_diagnostics_without_history() -> None:
     ] == "2026-07-20"
     assert compact["assessment"]["data_quality"]["sources"][0]["status"] == "available"
     assert compact["assessment"]["attractiveness"] is None
+
+
+def test_compact_analysis_keeps_research_diagnostics_and_trims_items() -> None:
+    compact = compact_analysis_for_llm(
+        {
+            "asset_type": "stock",
+            "code": "600000",
+            "valuation": {},
+            "research": {
+                "route": {
+                    "main_model": "technology_rd",
+                    "warnings": ["one", "two", "three", "four"],
+                    "scoring_eligible": False,
+                },
+                "datasets": {
+                    "income_statement": {
+                        "status": "partial",
+                        "source": "eastmoney_f10_detailed_financial_statement",
+                        "source_as_of": "2025-12-31",
+                        "available_at": "2026-03-20",
+                        "unit": "CNY unless field suffix is _pct",
+                        "coverage": 0.75,
+                        "limitations": ["candidate only"],
+                        "error": None,
+                        "items": [
+                            {"report_date": f"202{year}-12-31", "raw": {"x": 1}}
+                            for year in range(1, 6)
+                        ],
+                        "scoring_eligible": False,
+                    }
+                },
+                "scoring_eligible": False,
+            },
+        }
+    )
+
+    research = compact["research"]
+    assert research["route"]["warnings"] == ["one", "two", "three", "four"]
+    dataset = research["datasets"]["income_statement"]
+    assert [item["report_date"] for item in dataset["items"]] == [
+        "2023-12-31",
+        "2024-12-31",
+        "2025-12-31",
+    ]
+    assert all("raw" not in item for item in dataset["items"])
+    assert dataset["scoring_eligible"] is False

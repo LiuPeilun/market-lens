@@ -78,6 +78,7 @@ class AnalysisResult(FlexibleResponseModel):
     performance: dict[str, Any]
     notes: list[str] = Field(default_factory=list)
     assessment: ValuationAssessment | None = None
+    research: dict[str, Any] | None = None
 
 
 class AnalyzeRequest(BaseModel):

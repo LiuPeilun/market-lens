@@ -15,6 +15,11 @@ from market_lens.types import (
     FundHolding,
     FundHoldingsRoute,
     FundNavPoint,
+    ReitDistribution,
+    ReitFinancialSnapshot,
+    ReitPeriodicReportNotice,
+    ReitPriceBar,
+    ReitProfile,
     StockBar,
     StockIndustryValuationSnapshot,
     StockValuationPoint,
@@ -22,6 +27,18 @@ from market_lens.types import (
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.assessment import build_fund_assessment
 from market_lens.valuation.framework import analyze_index_price_proxy
+from market_lens.valuation.metrics import (
+    annualized_return,
+    format_pct,
+    max_drawdown,
+    simple_return,
+)
+from market_lens.valuation.research_context import (
+    build_fund_research_context,
+    build_reit_research_context,
+    build_stock_research_context,
+)
+from market_lens.valuation.routing import route_asset_model
 
 
 class MarketAnalysisAgent:
@@ -79,7 +96,7 @@ class MarketAnalysisAgent:
             industry_valuation, industry_valuation_error = self._load_industry_valuation(
                 valuations
             )
-            return analyze_stock(
+            result = analyze_stock(
                 code,
                 bars,
                 valuations,
@@ -93,7 +110,51 @@ class MarketAnalysisAgent:
                 financials_error=financials_error,
                 retrieved_at=retrieved_at,
             )
+            financial_scope = str(
+                ((result.get("valuation") or {}).get("factor_data") or {}).get(
+                    "model_scope"
+                )
+                or "unknown"
+            )
+            candidate_route = route_asset_model(
+                declared_asset_type="stock",
+                stock_profile=profile,
+                financial_scope=financial_scope,
+            )
+            detailed_rows, detailed_errors = self._load_stock_detailed_financials(
+                code,
+                main_model=candidate_route.main_model,
+            )
+            result["research"] = build_stock_research_context(
+                analysis_as_of=bars[-1].date,
+                stock_profile=profile,
+                financial_scope=financial_scope,
+                balance_sheets=detailed_rows["balance_sheet"],
+                income_statements=detailed_rows["income_statement"],
+                cash_flow_statements=detailed_rows["cash_flow_statement"],
+                errors=detailed_errors,
+                retrieved_at=retrieved_at,
+            )
+            return result
         if asset_type == "fund":
+            product_info = None
+            product_info_error = None
+            try:
+                product_info = self.data_client.get_fund_product_info(code)
+            except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
+                product_info_error = str(exc)
+            if (
+                product_info is not None
+                and str(product_info.fund_type or "").strip().casefold() == "reits"
+            ):
+                reit_profile = self.data_client.get_reit_profile(code)
+                return self._analyze_reit(
+                    reit_profile,
+                    start=start,
+                    end=end,
+                    retrieved_at=retrieved_at,
+                )
+
             try:
                 nav_points = self.data_client.get_exchange_fund_price_nav(
                     code,
@@ -108,12 +169,6 @@ class MarketAnalysisAgent:
             if not nav_points:
                 raise ValueError(f"No fund NAV data found for {code}.")
             fund_name = self.data_client.get_fund_name(code)
-            product_info = None
-            product_info_error = None
-            try:
-                product_info = self.data_client.get_fund_product_info(code)
-            except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
-                product_info_error = str(exc)
             holdings_route = None
             try:
                 holdings_route = self.data_client.get_fund_holdings_route(
@@ -202,8 +257,191 @@ class MarketAnalysisAgent:
                 result,
                 retrieved_at=retrieved_at,
             )
+            product_profile = (
+                ((result.get("valuation") or {}).get("product_data") or {}).get(
+                    "profile"
+                )
+            )
+            if product_profile not in {"etf", "etf_linked", "index_fund", "active_fund"}:
+                product_profile = None
+            result["research"] = build_fund_research_context(
+                analysis_as_of=nav_points[-1].date,
+                product_profile=product_profile,
+                retrieved_at=retrieved_at,
+            )
             return result
         raise ValueError("asset_type must be 'stock' or 'fund'")
+
+    def _load_stock_detailed_financials(
+        self,
+        code: str,
+        *,
+        main_model: str,
+    ) -> tuple[dict[str, list[Any]], dict[str, str]]:
+        empty_rows: dict[str, list[Any]] = {
+            "balance_sheet": [],
+            "income_statement": [],
+            "cash_flow_statement": [],
+        }
+        if main_model in {"bank", "insurance", "securities"}:
+            return empty_rows, {}
+
+        loaders = {
+            "balance_sheet": lambda: self.data_client.get_stock_balance_sheets(
+                code,
+                max_reports=8,
+            ),
+            "income_statement": lambda: self.data_client.get_stock_income_statements(
+                code,
+                max_reports=8,
+            ),
+            "cash_flow_statement": lambda: self.data_client.get_stock_cash_flow_statements(
+                code,
+                max_reports=8,
+            ),
+        }
+        errors: dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(loader): key for key, loader in loaders.items()}
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    empty_rows[key] = future.result()
+                except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
+                    errors[key] = str(exc)
+        return empty_rows, errors
+
+    def _analyze_reit(
+        self,
+        profile: ReitProfile,
+        *,
+        start: date,
+        end: date,
+        retrieved_at: datetime,
+    ) -> dict[str, Any]:
+        loaders = {
+            "exchange_price": lambda: self.data_client.get_reit_price_history(
+                profile.fund_code,
+                start=start,
+                end=end,
+            ),
+            "financials": lambda: self.data_client.get_reit_financials(
+                profile.fund_code
+            ),
+            "distributions": lambda: self.data_client.get_reit_distributions(
+                profile.fund_code
+            ),
+            "periodic_reports": lambda: self.data_client.get_reit_notices(
+                profile.fund_code
+            ),
+        }
+        loaded: dict[str, list[Any]] = {key: [] for key in loaders}
+        errors: dict[str, str] = {}
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(loader): key for key, loader in loaders.items()}
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    loaded[key] = future.result()
+                except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
+                    errors[key] = str(exc)
+
+        prices: list[ReitPriceBar] = sorted(
+            (item for item in loaded["exchange_price"] if item.date <= end),
+            key=lambda item: item.date,
+        )
+        financials: list[ReitFinancialSnapshot] = sorted(
+            (item for item in loaded["financials"] if item.report_date <= end),
+            key=lambda item: item.report_date,
+        )
+        distributions: list[ReitDistribution] = loaded["distributions"]
+        notices: list[ReitPeriodicReportNotice] = loaded["periodic_reports"]
+        research = build_reit_research_context(
+            analysis_as_of=end,
+            profile=profile,
+            prices=prices,
+            financials=financials,
+            distributions=distributions,
+            notices=notices,
+            errors=errors,
+            retrieved_at=retrieved_at,
+        )
+        latest_price = prices[-1] if prices else None
+        price_values = [item.close for item in prices]
+        total_return = (
+            simple_return(prices[0].close, prices[-1].close) if prices else None
+        )
+        annualized = (
+            annualized_return(
+                prices[0].close,
+                prices[-1].close,
+                prices[0].date,
+                prices[-1].date,
+            )
+            if prices
+            else None
+        )
+        latest_reported_nav = next(
+            (
+                item.period_end_unit_nav_cny
+                for item in reversed(financials)
+                if item.point_in_time_eligible
+                and item.notice_date is not None
+                and item.notice_date <= end
+            ),
+            None,
+        )
+        analysis_date = latest_price.date if latest_price else end
+        drawdown = max_drawdown(price_values)
+        return {
+            "asset_type": "fund",
+            "code": profile.fund_code,
+            "name": profile.fund_name,
+            "data_source": "reit_exchange_and_disclosures",
+            "as_of": analysis_date.isoformat(),
+            "latest_price": latest_price.close if latest_price else None,
+            "latest_reported_unit_nav": latest_reported_nav,
+            "valuation": {
+                "as_of": analysis_date.isoformat(),
+                "status": "research_only",
+                "method": "reit_basic_research_only",
+                "profile": "reit_basic",
+                "profile_name": "REIT basic research (not scored)",
+                "score": None,
+                "level": "unknown",
+                "level_zh": "未评分",
+                "confidence": 0.0,
+                "confidence_label": "未评分",
+                "missing_factors": [
+                    "affo",
+                    "occupancy",
+                    "rent_growth",
+                    "underlying_asset_leverage",
+                ],
+                "required_future_data": [
+                    "point-in-time AFFO or distributable cash flow",
+                    "occupancy and rent growth",
+                    "underlying asset debt and leverage",
+                ],
+            },
+            "performance": {
+                "sample_size": len(prices),
+                "total_return": total_return,
+                "annualized_return": annualized,
+                "max_drawdown": drawdown,
+                "total_return_text": format_pct(total_return),
+                "annualized_return_text": format_pct(annualized),
+                "max_drawdown_text": format_pct(drawdown),
+            },
+            "research": research,
+            "notes": [
+                "REIT output is research-only and is not connected to production scoring.",
+                "Exchange price is not replaced by sparse fund NAV history.",
+                "Reported unit NAV is only exposed with a matched periodic-report notice date.",
+                "AFFO, occupancy, rent growth, and underlying leverage remain unavailable.",
+                "This is a research summary, not investment advice.",
+            ],
+        }
 
     def _load_tracked_index_history(
         self,

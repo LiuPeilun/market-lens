@@ -48,6 +48,10 @@ def test_api_contract_accepts_v2_assessment_in_analysis_and_stream_meta() -> Non
     assert chat_response.analysis is not None
     assert chat_response.analysis.assessment is not None
     assert stream_payload["analysis"]["assessment"]["dimensions"]["valuation"]["score"] == 42.0
+    assert response.result.research is not None
+    assert response.result.research["scoring_eligible"] is False
+    assert chat_response.analysis.research is not None
+    assert stream_payload["analysis"]["research"]["route"]["main_model"] == "technology_rd"
 
 
 def test_history_contract_keeps_legacy_results_compatible() -> None:
@@ -69,6 +73,7 @@ def test_history_contract_keeps_legacy_results_compatible() -> None:
     )
 
     assert history.items[0].result.assessment is None
+    assert history.items[0].result.research is None
     assert history.items[0].result.valuation["score"] == 42.0
 
 
@@ -89,6 +94,15 @@ def analysis_result_payload(*, include_assessment: bool) -> dict:
         "notes": [],
     }
     if include_assessment:
+        result["research"] = {
+            "route": {
+                "asset_type": "stock",
+                "main_model": "technology_rd",
+                "scoring_eligible": False,
+            },
+            "datasets": {},
+            "scoring_eligible": False,
+        }
         dimension = {
             "model": "generic_non_financial_valuation_v1",
             "score": 42.0,
