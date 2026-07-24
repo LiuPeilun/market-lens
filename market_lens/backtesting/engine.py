@@ -99,8 +99,8 @@ def run_backtest(
             "date_count": len(dates),
             "start": dates[0].isoformat() if dates else None,
             "end": dates[-1].isoformat() if dates else None,
-            "train_dates": [item.isoformat() for item in train_dates],
-            "validation_dates": [item.isoformat() for item in validation_dates],
+            "train_dates": [item.isoformat() for item in sorted(train_dates)],
+            "validation_dates": [item.isoformat() for item in sorted(validation_dates)],
             "sample_count_by_horizon": {
                 str(key): len(value) for key, value in samples_by_horizon.items()
             },

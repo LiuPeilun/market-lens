@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
 from market_lens.backtesting.models import BacktestDataError, snapshot_from_analysis
 from market_lens.backtesting.universe import StockUniverseEntry, StockUniverseManifest
-from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError
+from market_lens.data.eastmoney import (
+    EastmoneyClient,
+    EastmoneyError,
+    stock_history_year_chunks,
+)
 from market_lens.types import (
     StockBar,
     StockFinancialIndicator,
@@ -17,7 +23,7 @@ from market_lens.types import (
 from market_lens.valuation.analyzer import analyze_stock
 
 RebalanceFrequency = Literal["monthly", "quarterly"]
-COLLECTOR_VERSION = "stock-point-in-time-v1"
+COLLECTOR_VERSION = "stock-point-in-time-v2"
 
 
 class StockBacktestCollector:
@@ -49,6 +55,8 @@ class StockBacktestCollector:
         retrieved_at = datetime.now(UTC)
         price_start = start - timedelta(days=14)
         price_end = end + timedelta(days=int(max(horizons) * 1.6) + 30)
+        benchmark_source = "eastmoney_index_history"
+        benchmark_error: str | None = None
         try:
             benchmark_bars = self.data_client.get_index_history(
                 benchmark_quote_id,
@@ -56,12 +64,28 @@ class StockBacktestCollector:
                 end=price_end,
             )
         except (EastmoneyError, ValueError) as exc:
-            raise BacktestDataError(
-                f"failed to collect benchmark {benchmark_quote_id}: {exc}"
-            ) from exc
+            benchmark_error = str(exc)
+            benchmark_bars = []
+        if not benchmark_bars:
+            benchmark_code = benchmark_quote_id.partition(".")[2]
+            try:
+                benchmark_bars = self.data_client.get_sina_index_history(
+                    benchmark_code,
+                    benchmark_quote_id,
+                    start=price_start,
+                    end=price_end,
+                )
+            except (AttributeError, EastmoneyError, ValueError) as exc:
+                benchmark_error = "; ".join(
+                    item for item in (benchmark_error, str(exc)) if item
+                )
+                benchmark_bars = []
+            if benchmark_bars:
+                benchmark_source = "sina_index_history"
         if not benchmark_bars:
             raise BacktestDataError(
-                f"benchmark price history is unavailable for {benchmark_quote_id}"
+                f"benchmark price history is unavailable for {benchmark_quote_id}: "
+                f"{benchmark_error or 'empty response'}"
             )
 
         analyses: list[dict[str, Any]] = []
@@ -125,6 +149,12 @@ class StockBacktestCollector:
                 "scheduled_dates": [item.isoformat() for item in scheduled_dates],
                 "horizons": list(horizons),
                 "benchmark_quote_id": benchmark_quote_id,
+                "benchmark_source": benchmark_source,
+                "benchmark_price_sha256": price_history_sha256(benchmark_bars),
+                "benchmark_request_range": {
+                    "start": price_start.isoformat(),
+                    "end": price_end.isoformat(),
+                },
                 "price_adjustment": "qfq",
                 "strict": strict,
                 "diagnostics": diagnostics,
@@ -143,13 +173,37 @@ class StockBacktestCollector:
         price_end: date,
         retrieved_at: datetime,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-        bars = self.data_client.get_stock_history(
-            entry.code,
-            start=price_start,
-            end=price_end,
-        )
+        price_source = "tencent_qfq_stock_history"
+        price_request_ranges = stock_history_year_chunks(price_start, price_end)
+        price_error: str | None = None
+        try:
+            bars = self.data_client.get_tencent_stock_history(
+                entry.code,
+                start=price_start,
+                end=price_end,
+            )
+        except (AttributeError, EastmoneyError, ValueError) as exc:
+            price_error = str(exc)
+            bars = []
         if not bars:
-            raise BacktestDataError("stock price history is unavailable")
+            try:
+                bars = self.data_client.get_stock_history(
+                    entry.code,
+                    start=price_start,
+                    end=price_end,
+                )
+            except (AttributeError, EastmoneyError, ValueError) as exc:
+                price_error = "; ".join(
+                    item for item in (price_error, str(exc)) if item
+                )
+                bars = []
+            if bars:
+                price_source = "eastmoney_stock_history"
+                price_request_ranges = [(price_start, price_end)]
+        if not bars:
+            raise BacktestDataError(
+                f"stock price history is unavailable: {price_error or 'empty response'}"
+            )
         valuations = self.data_client.get_stock_valuation(entry.code)
         if not valuations:
             raise BacktestDataError("stock valuation history is unavailable")
@@ -202,6 +256,18 @@ class StockBacktestCollector:
                     )
                 )
                 continue
+            latest_valuation = historical_valuations[-1]
+            if manifest.schema_version == "stock-universe-2":
+                mismatch_reason = verified_industry_mismatch(
+                    latest_valuation, industry, analysis_as_of
+                )
+                if mismatch_reason is not None:
+                    diagnostics.append(
+                        snapshot_diagnostic(
+                            entry.code, scheduled_date, "skipped", mismatch_reason
+                        )
+                    )
+                    continue
             known_financials = financials_available_as_of(financials, analysis_as_of)
             profile = StockProfile(
                 code=entry.code,
@@ -215,9 +281,7 @@ class StockBacktestCollector:
                     "effective_to": industry.end.isoformat() if industry.end else None,
                 },
             )
-            industry_snapshot, industry_error = self._industry_snapshot(
-                historical_valuations[-1]
-            )
+            industry_snapshot, industry_error = self._industry_snapshot(latest_valuation)
             analysis = analyze_stock(
                 entry.code,
                 historical_bars,
@@ -238,6 +302,8 @@ class StockBacktestCollector:
                 "universe_source": manifest.source,
                 "membership_effective_from": membership.start.isoformat(),
                 "industry_effective_from": industry.start.isoformat(),
+                "membership_payload_sha256": membership.payload_sha256,
+                "industry_payload_sha256": industry.payload_sha256,
                 "financial_rule": "notice_date_required_and_not_after_analysis_as_of",
                 "scheduled_date": scheduled_date.isoformat(),
             }
@@ -249,12 +315,14 @@ class StockBacktestCollector:
                         "source": manifest.source,
                         "status": "available",
                         "source_as_of": membership.start.isoformat(),
+                        "payload_sha256": membership.payload_sha256,
                     },
                     {
                         "key": "historical_industry_classification",
                         "source": industry.source,
                         "status": "available",
                         "source_as_of": industry.start.isoformat(),
+                        "payload_sha256": industry.payload_sha256,
                     },
                 ]
             )
@@ -264,6 +332,15 @@ class StockBacktestCollector:
                 {
                     **snapshot_diagnostic(entry.code, scheduled_date, "available", None),
                     "analysis_as_of": analysis_as_of.isoformat(),
+                    "price_source": price_source,
+                    "price_sha256": price_history_sha256(bars),
+                    "price_request_ranges": [
+                        {
+                            "start": range_start.isoformat(),
+                            "end": range_end.isoformat(),
+                        }
+                        for range_start, range_end in price_request_ranges
+                    ],
                     "financial_rows": len(known_financials),
                     "valuation_rows": len(historical_valuations),
                 }
@@ -336,6 +413,15 @@ def serialize_prices(bars: list[StockBar]) -> list[dict[str, Any]]:
     return [{"date": item.date.isoformat(), "close": item.close} for item in bars]
 
 
+def price_history_sha256(bars: list[StockBar]) -> str:
+    encoded = json.dumps(
+        serialize_prices(bars),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def snapshot_diagnostic(
     code: str,
     scheduled_date: date,
@@ -354,3 +440,19 @@ def is_member_near_schedule(entry: StockUniverseEntry, scheduled_date: date) -> 
     return any(
         entry.is_member(scheduled_date - timedelta(days=offset)) for offset in range(8)
     )
+
+
+def verified_industry_mismatch(
+    valuation: StockValuationPoint,
+    industry: Any,
+    analysis_as_of: date,
+) -> str | None:
+    if valuation.date != analysis_as_of:
+        return "valuation_not_available_on_analysis_trade_date"
+    if industry.source_as_of != analysis_as_of:
+        return "industry_evidence_date_mismatch"
+    if industry.board_code != valuation.board_code:
+        return "industry_board_code_mismatch"
+    if industry.em_industry != valuation.board_name:
+        return "industry_board_name_mismatch"
+    return None

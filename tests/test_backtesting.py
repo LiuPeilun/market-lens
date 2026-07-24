@@ -75,6 +75,12 @@ def test_run_backtest_builds_ranked_segments_and_holdout_candidate() -> None:
     assert report["release_decision"]["production_release"] is False
     assert report["release_decision"]["attractiveness"]["status"] == "insufficient_evidence"
     assert report["leakage_checks"]["same_day_entry_used"] is False
+    assert report["dataset"]["train_dates"] == [
+        "2026-01-06",
+        "2026-01-11",
+        "2026-01-16",
+    ]
+    assert report["dataset"]["validation_dates"] == ["2026-01-21"]
 
 
 def test_backtest_rejects_mixed_model_versions() -> None:

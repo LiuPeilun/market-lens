@@ -30,8 +30,11 @@ from market_lens.data.eastmoney import (
     parse_stock_peer_comparison,
     parse_stock_profile,
     parse_stock_valuation_row,
+    parse_tencent_qfq_history,
     rank_search_results,
     repair_mojibake,
+    stock_history_year_chunks,
+    tencent_stock_symbol,
 )
 from market_lens.types import FundHolding, FundTrackingInfo
 
@@ -68,6 +71,74 @@ def test_parse_sina_index_history() -> None:
     assert rows[0].date == date(2026, 7, 20)
     assert rows[0].close == 4598.3
     assert parse_sina_index_history("var _data=(null);") == []
+
+
+def test_parse_tencent_qfq_history() -> None:
+    rows = parse_tencent_qfq_history(
+        {
+            "code": 0,
+            "data": {
+                "sz000069": {
+                    "qfqday": [
+                        [
+                            "2020-07-22",
+                            "7.260",
+                            "7.080",
+                            "7.350",
+                            "7.010",
+                            "1061437.000",
+                            {"nd": "2020-07-22"},
+                        ]
+                    ]
+                }
+            },
+        },
+        "sz000069",
+    )
+
+    assert rows[0].date == date(2020, 7, 22)
+    assert rows[0].open == 7.26
+    assert rows[0].close == 7.08
+    assert rows[0].volume == 1061437.0
+
+
+def test_tencent_stock_history_uses_year_chunks_and_deduplicates(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str, ttl_seconds: int) -> dict[str, object]:
+        del ttl_seconds
+        decoded = unquote(url)
+        requested_urls.append(decoded)
+        row_date = "2020-12-31" if "2020-12-31" in decoded else "2021-01-04"
+        return {
+            "code": 0,
+            "data": {
+                "sz000069": {
+                    "qfqday": [
+                        [row_date, "7.0", "7.1", "7.2", "6.9", "1000"]
+                    ]
+                }
+            },
+        }
+
+    monkeypatch.setattr(client, "_get_json", fake_get_json)
+    rows = client.get_tencent_stock_history(
+        "000069", date(2020, 12, 1), date(2021, 1, 31)
+    )
+
+    assert tencent_stock_symbol("000069") == "sz000069"
+    assert stock_history_year_chunks(
+        date(2020, 12, 1), date(2021, 1, 31)
+    ) == [
+        (date(2020, 12, 1), date(2020, 12, 31)),
+        (date(2021, 1, 1), date(2021, 1, 31)),
+    ]
+    assert [row.date for row in rows] == [date(2020, 12, 31), date(2021, 1, 4)]
+    assert rows[1].change_amount == 0.0
+    assert len(requested_urls) == 2
+    assert "sz000069,day,2020-12-01,2020-12-31,400,qfq" in requested_urls[0]
+    assert "sz000069,day,2021-01-01,2021-01-31,400,qfq" in requested_urls[1]
 
 
 def test_parse_stock_profile() -> None:

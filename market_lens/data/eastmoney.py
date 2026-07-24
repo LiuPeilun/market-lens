@@ -1068,6 +1068,40 @@ class EastmoneyClient:
             if start <= item.date <= end
         ]
 
+    def get_tencent_stock_history(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+    ) -> list[StockBar]:
+        code = normalize_symbol(symbol)
+        if start > end:
+            raise ValueError("start must be on or before end")
+        market_symbol = tencent_stock_symbol(code)
+        bars_by_date: dict[date, StockBar] = {}
+        for chunk_start, chunk_end in stock_history_year_chunks(start, end):
+            request = ",".join(
+                (
+                    market_symbol,
+                    "day",
+                    chunk_start.isoformat(),
+                    chunk_end.isoformat(),
+                    "400",
+                    "qfq",
+                )
+            )
+            url = (
+                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
+                + urlencode({"param": request}, safe=",")
+            )
+            payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+            for bar in parse_tencent_qfq_history(payload, market_symbol):
+                if chunk_start <= bar.date <= chunk_end:
+                    bars_by_date[bar.date] = bar
+        return with_stock_bar_changes(
+            [bars_by_date[item] for item in sorted(bars_by_date)]
+        )
+
     def search_assets(
         self,
         keyword: str,
@@ -1252,6 +1286,9 @@ class EastmoneyClient:
         elif host == "quotes.sina.cn":
             headers["Accept"] = "application/json,text/javascript,*/*;q=0.8"
             headers["Referer"] = "https://finance.sina.com.cn/"
+        elif host == "web.ifzq.gtimg.cn":
+            headers["Accept"] = "application/json,text/plain,*/*"
+            headers["Referer"] = "https://gu.qq.com/"
         return headers
 
 
@@ -1320,6 +1357,26 @@ def infer_secid(symbol: str) -> str:
     if code.startswith(("5", "6", "9")):
         return f"1.{code}"
     return f"0.{code}"
+
+
+def tencent_stock_symbol(symbol: str) -> str:
+    code = normalize_symbol(symbol)
+    if not is_a_share_symbol(code):
+        raise ValueError(f"{code} does not look like an A-share stock code")
+    prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
+    return f"{prefix}{code}"
+
+
+def stock_history_year_chunks(start: date, end: date) -> list[tuple[date, date]]:
+    if start > end:
+        raise ValueError("start must be on or before end")
+    chunks: list[tuple[date, date]] = []
+    current = start
+    while current <= end:
+        chunk_end = min(end, date(current.year, 12, 31))
+        chunks.append((current, chunk_end))
+        current = date(current.year + 1, 1, 1)
+    return chunks
 
 
 def f10_stock_code(symbol: str) -> str:
@@ -2534,6 +2591,76 @@ def parse_sina_index_history(text: str) -> list[StockBar]:
             )
         )
     return sorted(rows, key=lambda item: item.date)
+
+
+def parse_tencent_qfq_history(
+    payload: dict[str, Any],
+    market_symbol: str,
+) -> list[StockBar]:
+    if payload.get("code") != 0:
+        raise EastmoneyError("Unexpected Tencent stock history response code")
+    data = payload.get("data")
+    security = data.get(market_symbol) if isinstance(data, dict) else None
+    if not isinstance(security, dict):
+        raise EastmoneyError(
+            f"Unexpected Tencent stock history response for {market_symbol}"
+        )
+    raw_rows = security.get("qfqday")
+    if raw_rows is None:
+        raw_rows = security.get("day")
+    if not isinstance(raw_rows, list):
+        raise EastmoneyError(
+            f"Tencent stock history has no qfq daily rows for {market_symbol}"
+        )
+
+    rows: list[StockBar] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, list) or len(raw_row) < 6:
+            raise EastmoneyError(
+                f"Unexpected Tencent stock history row for {market_symbol}"
+            )
+        try:
+            rows.append(
+                StockBar(
+                    date=parse_date(str(raw_row[0])),
+                    open=to_float(raw_row[1]),
+                    close=to_float(raw_row[2]),
+                    high=to_float(raw_row[3]),
+                    low=to_float(raw_row[4]),
+                    volume=to_float(raw_row[5]),
+                    amount=0.0,
+                    amplitude_pct=None,
+                    change_pct=None,
+                    change_amount=None,
+                    turnover_pct=None,
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise EastmoneyError(
+                f"Invalid Tencent stock history row for {market_symbol}"
+            ) from exc
+    return sorted(rows, key=lambda item: item.date)
+
+
+def with_stock_bar_changes(bars: list[StockBar]) -> list[StockBar]:
+    result: list[StockBar] = []
+    previous_close: float | None = None
+    for bar in sorted(bars, key=lambda item: item.date):
+        change_amount = bar.close - previous_close if previous_close is not None else None
+        change_pct = (
+            change_amount / previous_close * 100
+            if previous_close not in (None, 0) and change_amount is not None
+            else None
+        )
+        result.append(
+            replace(
+                bar,
+                change_pct=change_pct,
+                change_amount=change_amount,
+            )
+        )
+        previous_close = bar.close
+    return result
 
 
 def parse_fund_nav_row(row: Any) -> FundNavPoint | None:

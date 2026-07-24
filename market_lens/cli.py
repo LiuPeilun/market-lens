@@ -13,6 +13,11 @@ from market_lens.backtesting.engine import run_backtest
 from market_lens.backtesting.io import load_backtest_dataset
 from market_lens.backtesting.models import BacktestConfiguration, BacktestDataError
 from market_lens.backtesting.universe import load_stock_universe_manifest
+from market_lens.backtesting.universe_source import (
+    PILOT_DOLT_COMMIT,
+    AuditableStockUniverseBuilder,
+    DoltHubHistoricalIndexSource,
+)
 
 app = typer.Typer(help="Market Lens command line tools.")
 
@@ -125,6 +130,63 @@ def collect_stock_backtest(
     typer.echo(
         f"Collected {len(dataset['analyses'])} snapshots for "
         f"{len(dataset['prices'])} stocks into {output}"
+    )
+
+
+@app.command("build-stock-universe")
+def build_stock_universe(
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Write the audited universe manifest"),
+    ],
+    start: Annotated[str, typer.Option("--start", help="First snapshot schedule")],
+    end: Annotated[str, typer.Option("--end", help="Last snapshot schedule")],
+    index_code: Annotated[
+        str,
+        typer.Option("--index-code", help="Tushare-style historical index code"),
+    ] = "000300.SH",
+    frequency: Annotated[
+        str,
+        typer.Option("--frequency", help="monthly or quarterly"),
+    ] = "quarterly",
+    sample_size: Annotated[
+        int,
+        typer.Option("--sample-size", min=10, help="Stable sample size per snapshot"),
+    ] = 20,
+    seed: Annotated[
+        str,
+        typer.Option("--seed", help="Stable point-in-time sampling seed"),
+    ] = "market-lens-pilot-v1",
+    source_revision: Annotated[
+        str,
+        typer.Option("--source-revision", help="Pinned Dolt commit hash"),
+    ] = PILOT_DOLT_COMMIT,
+) -> None:
+    if frequency not in {"monthly", "quarterly"}:
+        raise typer.BadParameter("frequency must be monthly or quarterly")
+    try:
+        source = DoltHubHistoricalIndexSource(commit=source_revision)
+        manifest = AuditableStockUniverseBuilder(historical_source=source).build(
+            index_code=index_code,
+            start=parse_cli_date(start),
+            end=parse_cli_date(end),
+            frequency=frequency,
+            sample_size=sample_size,
+            seed=seed,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+        load_stock_universe_manifest(output).validate_for_collection(
+            [date.fromisoformat(item) for item in manifest["audit"]["snapshot_dates"]]
+        )
+    except (BacktestDataError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        f"Built {len(manifest['entries'])} audited stocks across "
+        f"{len(manifest['audit']['snapshot_dates'])} snapshots into {output}"
     )
 
 

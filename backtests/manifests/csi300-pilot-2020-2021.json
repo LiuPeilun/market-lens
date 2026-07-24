@@ -1,0 +1,3378 @@
+{
+  "schema_version": "stock-universe-2",
+  "name": "000300.SH historical quarterly stable-hash sample",
+  "source": "dolthub://chenditc/investment_data/ts_index_weight",
+  "source_revision": "d8uuk1008bb6kps34g0389kjn3fgn00l",
+  "generated_at": "2026-07-22T07:14:32.294727+00:00",
+  "selection_method": "dolthub-csi-snapshot-v1",
+  "point_in_time_verified": true,
+  "includes_delisted": true,
+  "historical_industry_verified": true,
+  "audit": {
+    "index_code": "000300.SH",
+    "scheduled_start": "2020-01-01",
+    "scheduled_end": "2021-12-31",
+    "frequency": "quarterly",
+    "sample_size_per_snapshot": 20,
+    "selection_seed": "market-lens-pilot-v1",
+    "selection_rule": "lowest sha256(seed|stock_code) among each historical snapshot",
+    "stock_status_filter": null,
+    "future_price_filter": null,
+    "snapshot_dates": [
+      "2020-03-31",
+      "2020-06-30",
+      "2020-09-30",
+      "2020-12-31",
+      "2021-03-31",
+      "2021-06-30",
+      "2021-09-30",
+      "2021-12-31"
+    ],
+    "population_sizes": [
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300,
+      300
+    ],
+    "snapshot_payload_sha256": [
+      "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3",
+      "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1",
+      "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb",
+      "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f",
+      "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6",
+      "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626",
+      "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353",
+      "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+    ],
+    "selected_unique_stocks": 28,
+    "selected_index_exits": 11,
+    "selected_delisted_stocks": 0,
+    "industry_rule": "exact-date Eastmoney valuation row board code and name"
+  },
+  "entries": [
+    {
+      "code": "000069",
+      "name": "华侨城A",
+      "list_date": "1997-09-10",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "fcd4053ef9c8c3caa502828e5563868d8e293f1f53c27b87364b72cef0b74db2"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "15bd7cdc20db0b67d1326afaea0b627ded661e17d7fe4251ffd824c05291ec42"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "1be6c5f6fc0e5e8d454fce1f7f7b29a956084ce56da84c85595aababdc83dbcc"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "f016631e6b6e67cede2835bc77e84c888c8749b236ac2c65581d6b04126b9cbe"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "9c5f7b9b82ceb99b00c43017fb250b3a56d04749672eebab30aef75ae3b5cd35"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "07e8da8c9d22a0865f018e0f19521d59632a558be863ed255c95aeb99e9c292e"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "4b78d0cd8e76755f801426538c13660eeb96460abd230b95850644f3d610d870"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:32.905952+00:00",
+          "payload_sha256": "dec0c89df8a1b4e976b4cd14a4abfd786b998a59b3ce0414ea12162b516644cb"
+        }
+      ]
+    },
+    {
+      "code": "000725",
+      "name": "京东方A",
+      "list_date": "2001-01-12",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "621d9d3d4eb5d1525e73f9af6c11d173470a416621867db60ab1f1fb67c259d5"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "d7bad3d3755876f95c56778e97aea1163d1f3561cb2fbab9a689a372540f8729"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "3d5720c2b2d59b8aa9c7f6a001ea266fb70029e414b81d03a4edaf23edc3da3f"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "9c2a688ac35fdf1db9e7ba7e8e2156af2b378297236cacb21098c00a77d485c4"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "628b5952eb02ba46bcf3303340c3631a6d3969f17d31778fb1fcabce88364ecf"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "e332ea0b1c21fbae15f6862324da4dd6cbec8694bcf16c3355de7ec4d5d947ab"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "61808a6804b5d6f9a89d002da5fd85b2d90f17ed1d329c09d037e64c75e8e494"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "光学光电子",
+          "csrc_industry": null,
+          "board_code": "016079",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:35.565078+00:00",
+          "payload_sha256": "5835a0c58fd08cf520a58493f6caacaed87a93127ffe88ec17d19cca3c22cf52"
+        }
+      ]
+    },
+    {
+      "code": "002064",
+      "name": "华峰化学",
+      "list_date": "2006-08-23",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "化学纤维",
+          "csrc_industry": null,
+          "board_code": "016026",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:38.375616+00:00",
+          "payload_sha256": "2a49124b3ba7c3638112628aea91b519d18ae9687c8a83724aec8afcc34a1df0"
+        }
+      ]
+    },
+    {
+      "code": "002179",
+      "name": "中航光电",
+      "list_date": "2007-11-01",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "军工电子Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016121",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:40.542566+00:00",
+          "payload_sha256": "bd858d712a1a5ebc12b78cf2c343458073b3d52221907212dcc19f761620f284"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "军工电子Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016121",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:40.542566+00:00",
+          "payload_sha256": "8a894abbaecfd34c84036d8adc805c4c79342c536ac12dd847e14d3f1f72f326"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "军工电子Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016121",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:40.542566+00:00",
+          "payload_sha256": "3a4b9363d0e98797131e9881da4f613d7275e7b091aade7287f8e563e8a9a108"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "军工电子Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016121",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:40.542566+00:00",
+          "payload_sha256": "692fa20ad7dbab882b034102f0ae75369a0f6d394e488ff4a67287ee9948df6d"
+        }
+      ]
+    },
+    {
+      "code": "002508",
+      "name": "老板电器",
+      "list_date": "2010-11-23",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:43.176904+00:00",
+          "payload_sha256": "532a355ea4f292c234ea818e7c8a00ce5b045728e0f87ecee983f6f033a27bcf"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:43.176904+00:00",
+          "payload_sha256": "4c6acba3d41d4ffebb810942a050b4ad15801b7773ac5256530d30010f73585e"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:43.176904+00:00",
+          "payload_sha256": "6a11438e95a0eedb0019b933b44f38bb819c753b1bfa4f0e5d6e2c7401fb0a69"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:43.176904+00:00",
+          "payload_sha256": "77f4a9d94b9a3705651cbf4ab2ba9dfec098675800de5f2d4148f3f0700cd63c"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:43.176904+00:00",
+          "payload_sha256": "3cb1aa577b771e562554c512725ea4f526a97f8b65a54531d47d304114f530b6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:43.176904+00:00",
+          "payload_sha256": "51a7bdca5314c2c185ca276e0376006fa2097efc210d815d1c99663e739f1c88"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "厨卫电器",
+          "csrc_industry": null,
+          "board_code": "016128",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:43.177902+00:00",
+          "payload_sha256": "fc34671161aa53c626a6a9ba0e967f0feeeae9e163539649facb78092a0d4167"
+        }
+      ]
+    },
+    {
+      "code": "002558",
+      "name": "巨人网络",
+      "list_date": "2011-03-02",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "44078e41efa3fe164d1802c405482ecdc29f3de4473b00c197b97be2cead55da"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "ae56769c1f320c7a0401312a99d26c054cc26f49c3f36f60db04ece3472ef2f0"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "af6e3f9000a8afb98c1b80f1b961d2137cf9ad6912e9e86bd9868e5e6f803fd4"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "e36591a9c3c4879f9dcdf80390a7e54c16e7cb59ddc6e0fc32d929b57e04106e"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "32bd84a9516892ba74ead060c1bbe29eeaabb521370eac73e45a0a2afe130ee0"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "ab33ee877df1734bc119efc8c965932d4080ae765bd7312f044ccd151bf27c39"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "游戏Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016087",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:45.510768+00:00",
+          "payload_sha256": "7f078d0bcc02aa679581fb9e0cd00c48f350bf87044721b740703ac6898b2283"
+        }
+      ]
+    },
+    {
+      "code": "002600",
+      "name": "领益智造",
+      "list_date": "2011-07-15",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "消费电子",
+          "csrc_industry": null,
+          "board_code": "016078",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:47.827781+00:00",
+          "payload_sha256": "0b15607843e183a125b8930775511edb0c4f5dc48736572635a75e272f80ec21"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "消费电子",
+          "csrc_industry": null,
+          "board_code": "016078",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:47.829482+00:00",
+          "payload_sha256": "a22a15dffd086db3a1fb83ea7462365bf24b1a6e651a856c379498bae0cb9c02"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "消费电子",
+          "csrc_industry": null,
+          "board_code": "016078",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:47.829482+00:00",
+          "payload_sha256": "58daad6b5019e6c5a68f28465731c1dd1289078630089af1e40c3718e231dbdf"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "消费电子",
+          "csrc_industry": null,
+          "board_code": "016078",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:47.829482+00:00",
+          "payload_sha256": "9e84e1e59b65385a3883eb68d19c0f302171022a5a66f7d34672d70586e06912"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "消费电子",
+          "csrc_industry": null,
+          "board_code": "016078",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:47.829482+00:00",
+          "payload_sha256": "9ca8f2a2eb531598c755128a360b4ead39453c87940ad698b5b6c4496b895e84"
+        }
+      ]
+    },
+    {
+      "code": "300144",
+      "name": "宋城演艺",
+      "list_date": "2010-12-09",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:50.285740+00:00",
+          "payload_sha256": "b6b9d7823c1c1dc89171358e5813a3f2ad18f65ad0a2493211fb2f11d8f36500"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "6def2cd04011154559c64f7ef0f888bdefa1fdcb81e1461d0af6e9b8c2f4e344"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "2bd924917ceeb17449ad0ad89547db2f86590ddccad152576d5a979e740d5f1a"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "de8a692ad60f836bfdcc3f222e923b6c937348d74d0fcc6db53e81e67f48d291"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "b578210dc519cc9c60c780ff2251cf67ce382ae646f5c86973efe65bee88467c"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "5a7a98b695033def415458858300c416e4a365a66001afd0ea60ffd948635314"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "321b482ead1997022c085380373da02c45ed74daf9ff26e4d11f42d5550fcbc3"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "旅游及景区",
+          "csrc_industry": null,
+          "board_code": "016160",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:50.286738+00:00",
+          "payload_sha256": "c09f115cfba5528c4ca9275d435005a641f8d7e9827ab549a4243604e97fdb18"
+        }
+      ]
+    },
+    {
+      "code": "300601",
+      "name": "康泰生物",
+      "list_date": "2017-02-07",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "1c9677066dec6015ae0572db6023114dffe5ef313a40a7fe7de8807269d348b8"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "8b81c916941ce0c568358ee8656ce43ed12a257c0805df0c6b718d492e77f177"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "3933965977fd0196a0bc2e45e98b120155a42230a086625c7f6077d4a7e283f9"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "519a16491c97e94fe59cfb7c3f53f988296d8331a06a8e98d9e11831893e89e3"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "3a6b9c139d5e94af5f54561fe187a820f4cc251890bc6b86a85003fb80a92657"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "3dd557ef2d6e580cd749987d3760c2b5b0c00898ee5ddc89791d858fe5d3bb60"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "生物制品",
+          "csrc_industry": null,
+          "board_code": "016085",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:52.922064+00:00",
+          "payload_sha256": "b343e7f7a923bf1b1200828a76c8fc849f7d249ab4f4a2b6b7a472c013c63bdd"
+        }
+      ]
+    },
+    {
+      "code": "600000",
+      "name": "浦发银行",
+      "list_date": "1999-11-10",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "72ff34e48b6527f45324ed36dc66883d28dc9548fa7bdec82e7e9d36af33e051"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "583f43cf72805eff1d81f21a9953ab3309fc800fea8bb0f05a6b2953d76d4c6d"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "73432d959082d72a6ed120f5ffba389931544b117c2967b16b2b07033d3c59ba"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "8caae31171ffe7b1996ae7b31ffcf7e8348b3e910115228b9508ff42ce417873"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "52f05521b28796727acaaa6eaaf1245e4d1382df79b69e5a099cec869c4221b0"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "7a5c5fe808cbe2c35816b3e2cfa5f7cb5e088b5be172c3ff91dd3a88c86b920f"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "12550e60895c9f583f18723ee84167c03825fde5ab9fd75645f1da6561b85d27"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "银行Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016029",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:55.298414+00:00",
+          "payload_sha256": "ad0d47579d75405172ce588b888d3aa324f16d12f2a963f93d8c6e3c4eafef14"
+        }
+      ]
+    },
+    {
+      "code": "600030",
+      "name": "中信证券",
+      "list_date": "2003-01-06",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "证券Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016027",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:57.613747+00:00",
+          "payload_sha256": "3f2280b2bad82a90faf9052a38b6d78f385a3db2253245ffb291eaa57af9ec4f"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "证券Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016027",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:57.614252+00:00",
+          "payload_sha256": "50f598608c352a45f729f88d38b50f55a7136072ece91021ae03c1e19d8e32d6"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "证券Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016027",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:57.614252+00:00",
+          "payload_sha256": "e781000fc5a51892e5729fd91229da9a4474bd7df5133f3288fddee19d475b6c"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "证券Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016027",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:57.614252+00:00",
+          "payload_sha256": "26e332bf202ba8136d5ec5491005cfb77f821bec6c4fb15b7b4d31ce84d823ff"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "证券Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016027",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:57.614252+00:00",
+          "payload_sha256": "8278abfcedfaa61319e3a0b2f3455e2ea5e49ee4c46762133577eea8c9ae4d74"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "证券Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016027",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:57.614252+00:00",
+          "payload_sha256": "92bef60a847ebb5a4e7e278bd5c5e3fb03ad69c68a152ca24708ed9c012b766a"
+        }
+      ]
+    },
+    {
+      "code": "600115",
+      "name": "中国东航",
+      "list_date": "1997-11-05",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "82208f712372bd93f88439cda94021f689090556f4209f6e45bef5c6204f987d"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "eb14c9078300fdf4eb33c589bec96628913f1aae6668d08aa9d0199a910ca5ce"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "50059cd0fde26d1301d1055a00280295df5fb18e033337d17e7ba26680926d38"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "da66e0d21ac15bf2b5ca638e6c0304b39d0ee2df635560f5f53bb69aaa9f0620"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "636f716d7277df582f056340adabb7a7a9c070519e5cbd14797539d41a5fcab3"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "472d14762fc1dc1fa560ca8b2a5340e74f0ad6f9684439087cbf6f30278022d8"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "be5c8d7ab764bec875d59c81d0d0bbf0aefbc43c2bbfaf511c7f5c3c4ae87a81"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "航空机场",
+          "csrc_industry": null,
+          "board_code": "016001",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:00.118520+00:00",
+          "payload_sha256": "a293e75d763df1030c00de2efba31a1f3253b5163f64329ce63b9fd7ec0aeaae"
+        }
+      ]
+    },
+    {
+      "code": "600219",
+      "name": "南山铝业",
+      "list_date": "1999-12-23",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "工业金属",
+          "csrc_industry": null,
+          "board_code": "016172",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:02.275517+00:00",
+          "payload_sha256": "90842a9c5711c44883e4cf58b1eaecb503d2ea451538012bb17a23db166e0ac7"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "工业金属",
+          "csrc_industry": null,
+          "board_code": "016172",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:02.275517+00:00",
+          "payload_sha256": "5c64f78b523abc1df7415a9db959320dc30a440f87e7bf1eca3373403581347a"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "工业金属",
+          "csrc_industry": null,
+          "board_code": "016172",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:02.275517+00:00",
+          "payload_sha256": "de4b95c8f645ba1120f88aad37a7766daf8966fb2e0b90a843aa5466b1b46c50"
+        }
+      ]
+    },
+    {
+      "code": "600271",
+      "name": "航天信息",
+      "list_date": "2003-07-11",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "IT服务Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016126",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:04.624013+00:00",
+          "payload_sha256": "f7052c89d92ab7ef44365b59a2067f1f4d132df269fa42f2290266132ad6992b"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "IT服务Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016126",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:04.624013+00:00",
+          "payload_sha256": "ccffe33f26dcd00505d215378d907b4978e27c20f28e698c2e125fcc4e90f387"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "IT服务Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016126",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:04.624013+00:00",
+          "payload_sha256": "5d00e5c2557bf1735e13ba048a63ed151ab38737824074854cd1bcf43d3b1e6c"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "IT服务Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016126",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:04.624013+00:00",
+          "payload_sha256": "3186f594d641d0edbb32812e48eafa093d4afe14a6b7b77fd97a71d7dedd953e"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "IT服务Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016126",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:04.624013+00:00",
+          "payload_sha256": "2be6b415badb5bd29f692c49b67411e4ce1dcb0247a90f6462df99b7bfb56b84"
+        }
+      ]
+    },
+    {
+      "code": "600299",
+      "name": "安迪苏",
+      "list_date": "2000-04-20",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "b16147ab14ef1c794b17f41ff21b38dd48e750800a4e5d4c5346012441e15141"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "c394765fe0bc94378264431a47597bdc157a8cd56ec78c5e131e9d655ca38190"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "3a9e24c9974d79835e92541c57692060ee74abe35dd9198f2cb14a6bf1873a93"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "545a894fd65a1f502a2e5761fba5218a38c47169ef99438dd9e490d929b9d690"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "2fba04453da35130c8b8ea52be3a6e38e6a9d97e91b79aaf466aeb278e8be82d"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "53e9eeda2450a5ee73304ee15f7c02d3985cf3e3cc376efecff51107f75fb7dc"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "化学制品",
+          "csrc_industry": null,
+          "board_code": "016041",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:07.128154+00:00",
+          "payload_sha256": "fddd469a5fef9a6f2d88ff2f03e0f9f388ddc3a380728fa8cd0f4a544d90eef1"
+        }
+      ]
+    },
+    {
+      "code": "600436",
+      "name": "片仔癀",
+      "list_date": "2003-06-16",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "94fcbb3c0a5d3f6c39711b5f32212dbd73bef2cf8056b70dd9243a007d26b318"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "71ddfb660fbd27ff466f33c882ff31f77f6a4317b48cc72ce32986cbf492dc05"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "e50361900b20df94853d08a5c62ac261d6eec030529d05fea7f0a0f022c1f76d"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "c4f3567607e11931b486bcc7096352f305db3dae17ca0d099a26d00a2ed71346"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "80f9a3f8fff9151f5113621d86a7022f61c04be6ac4b10c90799bc96bbfcb809"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "193a1c6ac383be246de3e6c3b1ee99f4c242092118381a8e3f427e7a2a6d94b5"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "a518530b568c004395a307ec7689f3506ff746448f5d47cf021f73a55b893418"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "中药Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016081",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:09.065331+00:00",
+          "payload_sha256": "5b46f578e6f449b00229f73eea602342923e87cc28a4d232e91ab458a6911d91"
+        }
+      ]
+    },
+    {
+      "code": "600606",
+      "name": "绿地控股",
+      "list_date": "1992-03-27",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:11.310093+00:00",
+          "payload_sha256": "2cccdbba0c0c753f2583072f7b73831d29d9b4fa78061a4a1eba29e78abefe80"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:11.310093+00:00",
+          "payload_sha256": "b4f4751956dfa9e98067395b3bba374a342528fccaafe7598dc3696e97c2be5c"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:11.310093+00:00",
+          "payload_sha256": "bf86a18609086a9e35cdcc9a758d91e8f10226b36d992831b307016d0ce36139"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:11.310093+00:00",
+          "payload_sha256": "236db95ba8434eb6e48e989571d66e30c283153b31d6fcbbe13c79cc2a4663e7"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:11.310093+00:00",
+          "payload_sha256": "10bb0d9f2d11036888150c62e3cebe4b8f03add774601a7f6d696c8b148c1526"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:11.310093+00:00",
+          "payload_sha256": "2875c19db02a1d025729ebdf34a5a30b23ae64b44bc796a70bf583eda9dc5ef8"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:11.311102+00:00",
+          "payload_sha256": "b735f9c6771a1507e8b0b5cab6f1e9ff8e96f613e56634423164286be3948657"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "房地产开发",
+          "csrc_industry": null,
+          "board_code": "016017",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:11.311102+00:00",
+          "payload_sha256": "9abca389030f946943e4ab2bdc7315cb104b2ec4836dfc09332593acd71ef116"
+        }
+      ]
+    },
+    {
+      "code": "600795",
+      "name": "国电电力",
+      "list_date": "1997-03-18",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "电力",
+          "csrc_industry": null,
+          "board_code": "016007",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:13.465759+00:00",
+          "payload_sha256": "19edcf2089776ba0d02564dd8b9ad8031da9b6ccef1aee071656b047d3dd9d59"
+        }
+      ]
+    },
+    {
+      "code": "601216",
+      "name": "君正集团",
+      "list_date": "2011-02-22",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "cf479a08b95d362bdd13b6b61552a97874625dfaa9681bd67941d1f09b4c415f"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "64109d332b90dbdedaf2765c306d481466f21ab882939f5d8f5dc3e17b21a113"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "91405d88ac6c588af8213b2e3e0647d1aed3ffad6f00131a1eeacc70e6631459"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "e382e250d703d512d4bdb337083a9351f295231d383c5f7539f153651be857cd"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "5191b9dd595d17336bc32246ca5d15d04abb9dcd4fcb79c2128fe81f40e1cf68"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "3a3f65285d7f1294be9c42eb9db11bd48bea55efe20edffd1377863d282a066a"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "fdd3d8f02d556c741626ce8919daf52748c8901c947cd4a2ab98d06325e9abbb"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "化学原料",
+          "csrc_industry": null,
+          "board_code": "016066",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:16.349938+00:00",
+          "payload_sha256": "e285625b4dc44400d935a43ea740994d01328f3a984988387c7c7fb6920b8bc0"
+        }
+      ]
+    },
+    {
+      "code": "601600",
+      "name": "中国铝业",
+      "list_date": "2007-04-30",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "工业金属",
+          "csrc_industry": null,
+          "board_code": "016172",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:16.477221+00:00",
+          "payload_sha256": "b65de4b0620d84403380e029e116706f9d7055a1920398f5bade8b92ccd00250"
+        }
+      ]
+    },
+    {
+      "code": "601601",
+      "name": "中国太保",
+      "list_date": "2007-12-25",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "1cda3e30f54d4bedff26dc1b854a0114af2e5efa35f84c8e9cde2a65d38ae6fb"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "2193e5ea9e3db091c506098d1cc881402afd23afbc3bc1d6263e23a041f6859a"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "54d3fc22b4dd4b65ea10c4d26e49961bef77af184c5fbf387fdeab1cc24bae1c"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "fe32b1a72f14a8c0d857045fb2c275f065c9633076b55c6e7d30e47fe301a059"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "d0116e123bcc48dc113bf2391af7fdf121d01b385e0663a7d032b7855574277e"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "a2a54fd37900977fbc8a8dde726b136dbb47707a7319b9994234b246964d0bca"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "ee31f34d1d83da75ee632240bdaa37b4f83bd7dadd978a2b362705fbbda37103"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "保险Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016028",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:18.372183+00:00",
+          "payload_sha256": "73cffed6983925908e992d8d97368403e1ad37260038165e21d7a862a056f508"
+        }
+      ]
+    },
+    {
+      "code": "601766",
+      "name": "中国中车",
+      "list_date": "2008-08-18",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:20.596371+00:00",
+          "payload_sha256": "be1461723c1c984b000d3b8d36cacd63e237efd58458106816cc9c4326fa987a"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:20.596371+00:00",
+          "payload_sha256": "1d8dbac594f19bc2798d822b882668de66ec2de13624c690cc2644e8eb48ff83"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:20.596371+00:00",
+          "payload_sha256": "121acbb5050b5684e5737a8aa7d18cc1a9da67e1b3b7256f6a4f13ec27df2521"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:20.596371+00:00",
+          "payload_sha256": "aaf8fd5fbffef3ea67b68207102ea89ca3b0ac2b8ac9f0ff79d445cd07df33f1"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:20.596959+00:00",
+          "payload_sha256": "cd6e6e531e19fc2402d43e51ba4ad345087315e3ea906be56008289b67c8b351"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:20.596959+00:00",
+          "payload_sha256": "a058d972bcb3d85b542ac4f915fe509d9f0ea53eeb31acc11a7ee5a6a0ffdff9"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:20.596959+00:00",
+          "payload_sha256": "75f1c09f52b3f51bc675b3af3b2455ee9e6a656fb3c590212a06672c91027fbb"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "轨交设备Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016124",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:20.596959+00:00",
+          "payload_sha256": "4b3daf5f5f465c38968b9fb8d9175711905f609eae8b1e173e28d94bdabeb798"
+        }
+      ]
+    },
+    {
+      "code": "601872",
+      "name": "招商轮船",
+      "list_date": "2006-12-01",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "航运港口",
+          "csrc_industry": null,
+          "board_code": "016016",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:22.701999+00:00",
+          "payload_sha256": "8d84f00117ad7529703ff0181f6f9d5ae85002735203cb6676cf8095f5fa6595"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "航运港口",
+          "csrc_industry": null,
+          "board_code": "016016",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:22.701999+00:00",
+          "payload_sha256": "cc5598a08b8f8397a4d8a05bc5fa0b7d95a28235375d17bc8057d552277b3c76"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "航运港口",
+          "csrc_industry": null,
+          "board_code": "016016",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:22.701999+00:00",
+          "payload_sha256": "e404ca1afd15a9db272d54813b17cbc76fea549110c4c07f5bd7e8d1c3807096"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "航运港口",
+          "csrc_industry": null,
+          "board_code": "016016",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:22.703000+00:00",
+          "payload_sha256": "9caec1af96adf8e813c4bd3e771f54b8754bae4edb943dada367fb818ba157a2"
+        }
+      ]
+    },
+    {
+      "code": "603019",
+      "name": "中科曙光",
+      "list_date": "2014-11-06",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:13:23.159948+00:00",
+          "payload_sha256": "1af7d378c34a8b2f5221d39f06646147230a0f2a05ae4e15b77657e5a5c25da3"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-03-31",
+          "end": "2020-03-31",
+          "em_industry": "计算机设备",
+          "csrc_industry": null,
+          "board_code": "016055",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-03-31",
+          "retrieved_at": "2026-07-22T07:14:24.733148+00:00",
+          "payload_sha256": "98904a559036d8836d587109102263b5a9c1024430c47b7ea1ffe8dec6c456f0"
+        },
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "计算机设备",
+          "csrc_industry": null,
+          "board_code": "016055",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:24.733148+00:00",
+          "payload_sha256": "e00f359e77d14cdb0325f05d4dbd0b7bd9609a36daac38bcaadda37e66f3fe9d"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "计算机设备",
+          "csrc_industry": null,
+          "board_code": "016055",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:24.733148+00:00",
+          "payload_sha256": "52b280d4e3ca63a545bf6161f3c20732e3fe3d6c1aebaa7f2080b6b84c101529"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "计算机设备",
+          "csrc_industry": null,
+          "board_code": "016055",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:24.733148+00:00",
+          "payload_sha256": "032a42bf804de2f55838f318cc3df27dec2aef8d4b6d843c7845aaf48f3eab66"
+        }
+      ]
+    },
+    {
+      "code": "603233",
+      "name": "大参林",
+      "list_date": "2017-07-31",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "医药商业",
+          "csrc_industry": null,
+          "board_code": "016083",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:27.386383+00:00",
+          "payload_sha256": "ce389d8d7eb9cc2009b723169efc5e678adc8d2f2b843085d5c60cd9a90b4037"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "医药商业",
+          "csrc_industry": null,
+          "board_code": "016083",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:27.387382+00:00",
+          "payload_sha256": "a9fe954265381316947fd53f86c890ae8bb2666773d3a744d6e32b7af4667248"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "医药商业",
+          "csrc_industry": null,
+          "board_code": "016083",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:27.387382+00:00",
+          "payload_sha256": "12d0161d2ec2b6aaf38aee82ad65bde527e6c72701e1dbc1360713f3a5d830f7"
+        }
+      ]
+    },
+    {
+      "code": "603369",
+      "name": "今世缘",
+      "list_date": "2014-07-03",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:13:24.025755+00:00",
+          "payload_sha256": "8408f64d473788102859f1bedfa046acc9db99c48cc7e413c2475866add70af1"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:13:24.870619+00:00",
+          "payload_sha256": "080ea05a3255f36ff73d051bdd6d91126d75f90e4e107fcff6f1324cc161eddb"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-06-30",
+          "end": "2020-06-30",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-06-30",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "baafc4b1ba41c641116c902d4ca4380356b5eed411d4307ffc86b6469192c7ea"
+        },
+        {
+          "start": "2020-09-30",
+          "end": "2020-09-30",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-09-30",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "800c5717c68e5c7c376fb4d68f8eb7c8a7ac740b0f0c9c9ee71607a11584887d"
+        },
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "7e33f851740a29d244943ba0b867b7075559f57e7c137b631c7b85578e7f3b1b"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "e19a1cf26447bd2ace02f1c054b1881612210c09b00e6f558699bc4a1b00d08a"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "42a658cbc5032d34ee66a61b8310e3fe66fa8ef0c3f85eb0df6fbad08921c832"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "423003788b40a39d798ef751ee18fe2c73c5b8055d8d5e7de559137fec9e8169"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "白酒Ⅱ",
+          "csrc_industry": null,
+          "board_code": "016165",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:29.730374+00:00",
+          "payload_sha256": "5bdf0afdaa778cd37db4f8cb944ac29fbade5d8a34bf227d5331daea6e306db9"
+        }
+      ]
+    },
+    {
+      "code": "603939",
+      "name": "益丰药房",
+      "list_date": "2015-02-17",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "医药商业",
+          "csrc_industry": null,
+          "board_code": "016083",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:32.215763+00:00",
+          "payload_sha256": "80fe53218ec47cb8184fb671b5c43257455052b8b16ff1529c36f4de29aaf0d0"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "医药商业",
+          "csrc_industry": null,
+          "board_code": "016083",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:32.215763+00:00",
+          "payload_sha256": "f5bdd5131370cce30cc46aa51626e2bc109fdd0f45b79bc4c4632bdeacb1c67a"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "医药商业",
+          "csrc_industry": null,
+          "board_code": "016083",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:32.215763+00:00",
+          "payload_sha256": "24df7f448828499f27ffb5f307d43b3121c7fee8064200e5074ef07aa441d12e"
+        }
+      ]
+    },
+    {
+      "code": "688012",
+      "name": "中微公司",
+      "list_date": "2019-07-22",
+      "delist_date": null,
+      "memberships": [
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:13:25.828876+00:00",
+          "payload_sha256": "7c054b2a802885ede0d6e20271f93e4ecba4bbc9a394ae7c85ebff9a461b1c5f"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:13:26.666828+00:00",
+          "payload_sha256": "6a91c5a2488f3a697f8a9d1aa4d39cd2530250cfacf504731d9b7d0bfd91eeb6"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:13:27.580920+00:00",
+          "payload_sha256": "8e22b5c22035fb39a6790d59143256c231ce4d193a4c6b07d99949ebcc676626"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:13:28.650370+00:00",
+          "payload_sha256": "7e1f1adb7457164b7e0fb5bce0478c802022a3a3008f1cfe03b7c02150717353"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "source": "dolthub://chenditc/investment_data/ts_index_weight",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:13:29.425734+00:00",
+          "payload_sha256": "29be3094f913a08379f1d9ff1c3040f4f00e1c61718c73250cf91e46dde5c60c"
+        }
+      ],
+      "industries": [
+        {
+          "start": "2020-12-31",
+          "end": "2020-12-31",
+          "em_industry": "半导体",
+          "csrc_industry": null,
+          "board_code": "016077",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2020-12-31",
+          "retrieved_at": "2026-07-22T07:14:32.294727+00:00",
+          "payload_sha256": "03e66fdf6cda3180d27b3020949180167ef21d3a3f8166a547d4d5af647824a1"
+        },
+        {
+          "start": "2021-03-31",
+          "end": "2021-03-31",
+          "em_industry": "半导体",
+          "csrc_industry": null,
+          "board_code": "016077",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-03-31",
+          "retrieved_at": "2026-07-22T07:14:32.294727+00:00",
+          "payload_sha256": "cf28224c47598fb1c113fc82ed6c4cf1a1395f6100cff4b2fb04e943b1b9b5dc"
+        },
+        {
+          "start": "2021-06-30",
+          "end": "2021-06-30",
+          "em_industry": "半导体",
+          "csrc_industry": null,
+          "board_code": "016077",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-06-30",
+          "retrieved_at": "2026-07-22T07:14:32.294727+00:00",
+          "payload_sha256": "a2b9c34f63346e070ef265e02d9f11b2bb7e2e5e1f1e7ac2f2606298600735d8"
+        },
+        {
+          "start": "2021-09-30",
+          "end": "2021-09-30",
+          "em_industry": "半导体",
+          "csrc_industry": null,
+          "board_code": "016077",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-09-30",
+          "retrieved_at": "2026-07-22T07:14:32.294727+00:00",
+          "payload_sha256": "292cc2025706f4259f5c93435c75ce3620ea86dde82ed511abfdd0deb8ad3a1d"
+        },
+        {
+          "start": "2021-12-31",
+          "end": "2021-12-31",
+          "em_industry": "半导体",
+          "csrc_industry": null,
+          "board_code": "016077",
+          "source": "eastmoney:RPT_VALUEANALYSIS_DET",
+          "source_as_of": "2021-12-31",
+          "retrieved_at": "2026-07-22T07:14:32.294727+00:00",
+          "payload_sha256": "2a21a54576dd2c819aa9e84b436fd7f2d8a0e9e9aede4bc2fa7021ff781c5a7e"
+        }
+      ]
+    }
+  ]
+}

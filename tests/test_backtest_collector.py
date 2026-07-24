@@ -37,6 +37,9 @@ class FakeCollectorClient:
             make_bar(date(2026, 2, 2), 102.0),
         ]
 
+    def get_tencent_stock_history(self, code, start, end):
+        return self.get_stock_history(code, start, end)
+
     def get_stock_valuation(self, code):
         return [
             make_valuation(code, date(2026, 1, 29), 10.0),
@@ -71,6 +74,30 @@ class FakeCollectorClient:
         )
 
 
+class FakeBenchmarkFallbackClient(FakeCollectorClient):
+    def get_index_history(self, quote_id, start, end):
+        del quote_id, start, end
+        raise ValueError("primary unavailable")
+
+    def get_sina_index_history(self, index_code, quote_id, start, end):
+        del index_code, quote_id, start, end
+        return [make_bar(date(2026, 1, 1), 100.0), make_bar(date(2026, 1, 30), 110.0)]
+
+
+class FakeStockFallbackClient(FakeCollectorClient):
+    def get_tencent_stock_history(self, code, start, end):
+        del code, start, end
+        raise ValueError("primary unavailable")
+
+    def get_stock_history(self, code, start, end):
+        del code, start, end
+        return [
+            make_bar(date(2026, 1, 29), 100.0),
+            make_bar(date(2026, 1, 30), 101.0),
+            make_bar(date(2026, 2, 2), 102.0),
+        ]
+
+
 def test_collector_builds_verified_month_end_snapshot() -> None:
     client = FakeCollectorClient()
     collector = StockBacktestCollector(client)  # type: ignore[arg-type]
@@ -89,10 +116,37 @@ def test_collector_builds_verified_month_end_snapshot() -> None:
     assert analysis["backtest_provenance"]["financial_rule"].startswith(
         "notice_date_required"
     )
-    assert snapshot_from_analysis(analysis).provenance == "stock-point-in-time-v1"
+    assert snapshot_from_analysis(analysis).provenance == "stock-point-in-time-v2"
     assert dataset["prices"]["stock:600519"][-1]["date"] == "2026-02-02"
     assert dataset["collection"]["diagnostics"][0]["financial_rows"] == 1
     assert client.industry_calls == 1
+
+
+def test_collector_falls_back_to_sina_benchmark_history() -> None:
+    dataset = StockBacktestCollector(FakeBenchmarkFallbackClient()).collect(  # type: ignore[arg-type]
+        verified_manifest(),
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 31),
+        horizons=(1,),
+    )
+
+    assert dataset["collection"]["benchmark_source"] == "sina_index_history"
+
+
+def test_collector_falls_back_to_eastmoney_stock_history() -> None:
+    dataset = StockBacktestCollector(FakeStockFallbackClient()).collect(  # type: ignore[arg-type]
+        verified_manifest(),
+        start=date(2026, 1, 1),
+        end=date(2026, 1, 31),
+        horizons=(1,),
+    )
+
+    diagnostic = dataset["collection"]["diagnostics"][0]
+    assert diagnostic["price_source"] == "eastmoney_stock_history"
+    assert len(diagnostic["price_sha256"]) == 64
+    assert diagnostic["price_request_ranges"] == [
+        {"start": "2025-12-18", "end": "2026-03-03"}
+    ]
 
 
 def test_collector_manifest_rejects_survivorship_biased_universe() -> None:
