@@ -28,6 +28,7 @@ from market_lens.valuation.fund_product import (
 from market_lens.valuation.metrics import (
     annualized_return,
     format_pct,
+    fund_performance_index,
     max_drawdown,
     percentile_rank,
     simple_return,
@@ -560,16 +561,24 @@ def analyze_fund(
 ) -> dict[str, Any]:
     latest = nav_points[-1] if nav_points else None
     retrieved_at = retrieved_at or datetime.now(UTC)
-    nav_values = [item.unit_nav for item in nav_points]
+    performance_curve = fund_performance_index(nav_points)
+    performance_values = [value for _, value in performance_curve]
+    performance_basis = (
+        "adjusted_exchange_price"
+        if data_source == "exchange_price_history"
+        else "dividend_reinvested_nav"
+    )
     total_return = None
     annualized = None
-    if nav_points:
-        total_return = simple_return(nav_points[0].unit_nav, nav_points[-1].unit_nav)
+    if performance_curve:
+        first_date, first_value = performance_curve[0]
+        last_date, last_value = performance_curve[-1]
+        total_return = simple_return(first_value, last_value)
         annualized = annualized_return(
-            nav_points[0].unit_nav,
-            nav_points[-1].unit_nav,
-            nav_points[0].date,
-            nav_points[-1].date,
+            first_value,
+            last_value,
+            first_date,
+            last_date,
         )
 
     valuation = analyze_fund_valuation(
@@ -608,16 +617,23 @@ def analyze_fund(
         "latest_cumulative_nav": latest.cumulative_nav if latest else None,
         "performance": {
             "sample_size": len(nav_points),
+            "basis": performance_basis,
             "total_return": total_return,
             "annualized_return": annualized,
-            "max_drawdown": max_drawdown(nav_values),
+            "max_drawdown": max_drawdown(performance_values),
             "total_return_text": format_pct(total_return),
             "annualized_return_text": format_pct(annualized),
-            "max_drawdown_text": format_pct(max_drawdown(nav_values)),
+            "max_drawdown_text": format_pct(max_drawdown(performance_values)),
         },
         "valuation": valuation,
         "notes": [
-            "Fund NAV performance is not the same as holding-level valuation.",
+            (
+                "Fund performance uses an adjusted exchange-price series and is not the same "
+                "as holding-level valuation."
+                if performance_basis == "adjusted_exchange_price"
+                else "Fund performance uses a dividend-reinvested NAV series and is not the "
+                "same as holding-level valuation."
+            ),
             (
                 "Holding-level valuation uses the latest disclosed top holdings "
                 "and their reported weights."

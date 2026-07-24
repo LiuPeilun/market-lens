@@ -43,6 +43,7 @@ from market_lens.storage.workspace import SupabaseWorkspaceStore
 from market_lens.tools.catalog import build_default_executor
 from market_lens.tools.executor import require_tool_data
 from market_lens.tools.models import ToolApprovalGrant, ToolContext
+from market_lens.valuation.metrics import fund_performance_index
 
 mcp_gateway = build_mcp_gateway()
 sandbox_runner = build_sandbox_runner()
@@ -190,12 +191,30 @@ def fund_nav(
         fund_name = client.get_fund_name(code)
     except (ValueError, EastmoneyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    performance_by_date = dict(fund_performance_index(rows))
+    items = []
+    for item in rows:
+        performance_index = performance_by_date.get(item.date)
+        items.append(
+            {
+                **item.__dict__,
+                "performance_index": performance_index,
+                "cumulative_return": (
+                    performance_index - 1.0 if performance_index is not None else None
+                ),
+            }
+        )
     return {
         "code": code,
         "name": fund_name,
         "data_source": data_source,
+        "performance_basis": (
+            "adjusted_exchange_price"
+            if data_source == "exchange_price_history"
+            else "dividend_reinvested_nav"
+        ),
         "count": len(rows),
-        "items": [item.__dict__ for item in rows],
+        "items": items,
     }
 
 

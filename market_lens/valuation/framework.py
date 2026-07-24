@@ -7,7 +7,7 @@ from statistics import pstdev
 from typing import Any, Literal
 
 from market_lens.types import FundHolding, FundNavPoint, StockBar, StockValuationPoint
-from market_lens.valuation.metrics import percentile_rank
+from market_lens.valuation.metrics import fund_performance_index, percentile_rank
 
 ValuationLevel = Literal[
     "extremely_overvalued",
@@ -460,7 +460,7 @@ def serialize_holding(
 
 
 def annualized_nav_volatility(nav_points: list[FundNavPoint]) -> float | None:
-    values = [item.unit_nav for item in nav_points if item.unit_nav is not None]
+    values = [value for _, value in fund_performance_index(nav_points)]
     returns = [
         current / previous - 1
         for previous, current in zip(values, values[1:], strict=False)

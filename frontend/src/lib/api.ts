@@ -117,6 +117,8 @@ export interface FundNavPoint {
   unit_nav: number | null
   cumulative_nav: number | null
   daily_growth_pct: number | null
+  performance_index: number | null
+  cumulative_return: number | null
   subscribe_status: string | null
   redeem_status: string | null
 }
@@ -257,6 +259,7 @@ export interface AnalysisResult {
   holdings_route?: FundHoldingsRouteInfo
   performance: {
     sample_size: number
+    basis?: string
     total_return: number | null
     annualized_return: number | null
     max_drawdown: number | null
@@ -408,6 +411,7 @@ export function getFundNav(code: string, start: string, end?: string) {
     code: string
     name: string | null
     data_source?: string
+    performance_basis?: string
     count: number
     items: FundNavPoint[]
   }>(

@@ -105,6 +105,7 @@ export function DashboardPage() {
   const [isComposing, setIsComposing] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [isResolving, setIsResolving] = useState(false)
+  const [fundChartMode, setFundChartMode] = useState<'performance' | 'nav'>('performance')
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
@@ -167,10 +168,23 @@ export function DashboardPage() {
 
   const chartOption = useMemo<EChartsOption>(() => {
     const submittedAssetType = submitted?.assetType ?? assetType
+    const showFundPerformance =
+      submittedAssetType === 'fund' && fundChartMode === 'performance'
     const rows =
       submittedAssetType === 'stock'
         ? (stockHistoryQuery.data?.items ?? []).map((item) => [item.date, item.close])
-        : (fundNavQuery.data?.items ?? []).map((item) => [item.date, item.unit_nav])
+        : (fundNavQuery.data?.items ?? []).map((item) => [
+            item.date,
+            showFundPerformance && item.cumulative_return !== null
+              ? item.cumulative_return * 100
+              : item.unit_nav,
+          ])
+    const seriesName =
+      submittedAssetType === 'stock'
+        ? '收盘价'
+        : showFundPerformance
+          ? '累计收益 (%)'
+          : '单位净值'
 
     return {
       animationDuration: 300,
@@ -180,9 +194,9 @@ export function DashboardPage() {
         {
           areaStyle: { color: 'rgba(15, 118, 110, 0.08)' },
           data: rows,
-          name: submittedAssetType === 'stock' ? 'close' : 'unit nav',
+          name: seriesName,
           showSymbol: false,
-          smooth: true,
+          smooth: false,
           type: 'line',
         },
       ],
@@ -195,11 +209,18 @@ export function DashboardPage() {
       },
       yAxis: {
         axisLine: { lineStyle: { color: '#cbd5e1' } },
+        axisLabel: showFundPerformance ? { formatter: '{value}%' } : undefined,
         scale: true,
         type: 'value',
       },
     }
-  }, [assetType, fundNavQuery.data?.items, stockHistoryQuery.data?.items, submitted?.assetType])
+  }, [
+    assetType,
+    fundChartMode,
+    fundNavQuery.data?.items,
+    stockHistoryQuery.data?.items,
+    submitted?.assetType,
+  ])
 
   const result = analysisQuery.data ?? chatAnalysis ?? undefined
   const currentAssetLabel = formatAssetLabel(
@@ -670,9 +691,32 @@ export function DashboardPage() {
           <AssessmentOverview isBusy={isBusy} result={result} />
 
           <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle>走势</CardTitle>
-              <Badge variant="outline">{currentAssetLabel}</Badge>
+            <CardHeader className="flex-row items-center justify-between gap-3 max-sm:flex-col max-sm:items-start">
+              <CardTitle>
+                {(submitted?.assetType ?? assetType) === 'stock'
+                  ? '价格走势'
+                  : fundChartMode === 'performance'
+                    ? '业绩走势'
+                    : '单位净值走势'}
+              </CardTitle>
+              <div className="flex max-w-full flex-wrap items-center justify-end gap-3 max-sm:justify-start">
+                {(submitted?.assetType ?? assetType) === 'fund' ? (
+                  <Tabs
+                    onValueChange={(value) =>
+                      setFundChartMode(value as 'performance' | 'nav')
+                    }
+                    value={fundChartMode}
+                  >
+                    <TabsList>
+                      <TabsTrigger value="performance">累计收益</TabsTrigger>
+                      <TabsTrigger value="nav">单位净值</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                ) : null}
+                <Badge className="max-w-full truncate" variant="outline">
+                  {currentAssetLabel}
+                </Badge>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="h-[420px]">

@@ -26,6 +26,7 @@ from market_lens.valuation.framework import (
 )
 from market_lens.valuation.metrics import (
     annualized_return,
+    fund_performance_index,
     max_drawdown,
     percentile_rank,
     valuation_label,
@@ -54,6 +55,20 @@ def test_annualized_return() -> None:
     result = annualized_return(100, 121, date(2020, 1, 1), date(2022, 1, 1))
     assert result is not None
     assert 0.09 < result < 0.11
+
+
+def test_fund_performance_index_reinvests_distributions() -> None:
+    points = [
+        FundNavPoint(date(2020, 1, 1), 1.0, 1.0, None, None, None),
+        FundNavPoint(date(2021, 1, 1), 2.0, 2.0, None, None, None),
+        FundNavPoint(date(2022, 1, 1), 1.5, 2.0, None, None, None),
+        FundNavPoint(date(2023, 1, 1), 1.5, 2.5, None, None, None),
+    ]
+
+    curve = fund_performance_index(points)
+
+    assert [point_date for point_date, _ in curve] == [point.date for point in points]
+    assert [value for _, value in curve] == pytest.approx([1.0, 2.0, 2.0, 8 / 3])
 
 
 def test_valuation_level_boundaries() -> None:

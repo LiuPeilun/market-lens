@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from datetime import date
 
+from market_lens.types import FundNavPoint
+
 
 def clean_numbers(values: list[float | None]) -> list[float]:
     return [value for value in values if value is not None and math.isfinite(value)]
@@ -47,6 +49,62 @@ def max_drawdown(values: list[float | None]) -> float | None:
         if peak > 0:
             worst = min(worst, value / peak - 1)
     return worst
+
+
+def fund_performance_index(points: list[FundNavPoint]) -> list[tuple[date, float]]:
+    """Build a distribution-adjusted wealth index from fund NAV or adjusted prices."""
+    result: list[tuple[date, float]] = []
+    wealth = 1.0
+    previous_unit_nav: float | None = None
+    previous_cumulative_nav: float | None = None
+
+    for point in sorted(points, key=lambda item: item.date):
+        unit_nav = _finite_positive(point.unit_nav)
+        if unit_nav is None:
+            continue
+        cumulative_nav = _finite_number(point.cumulative_nav)
+
+        if previous_unit_nav is not None:
+            period_return: float | None = None
+            if previous_cumulative_nav is not None and cumulative_nav is not None:
+                previous_distributions = previous_cumulative_nav - previous_unit_nav
+                current_distributions = cumulative_nav - unit_nav
+                distribution = current_distributions - previous_distributions
+                if distribution < 1e-8:
+                    distribution = 0.0
+                gross_return = (unit_nav + distribution) / previous_unit_nav
+                if math.isfinite(gross_return) and gross_return > 0:
+                    period_return = gross_return - 1.0
+
+            if (
+                period_return is None
+                and point.daily_growth_pct is not None
+                and math.isfinite(point.daily_growth_pct)
+            ):
+                period_return = float(point.daily_growth_pct) / 100.0
+            if period_return is None:
+                period_return = unit_nav / previous_unit_nav - 1.0
+
+            wealth *= 1.0 + period_return
+
+        result.append((point.date, wealth))
+        previous_unit_nav = unit_nav
+        previous_cumulative_nav = cumulative_nav
+
+    return result
+
+
+def _finite_number(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def _finite_positive(value: float | None) -> float | None:
+    number = _finite_number(value)
+    if number is None or number <= 0:
+        return None
+    return number
 
 
 def valuation_label(percentile: float | None) -> str:

@@ -287,6 +287,26 @@ def test_fund_analysis_exposes_pending_assessment_with_model_weights() -> None:
     assert all(factor["status"] == "missing" for factor in valuation["factors"])
 
 
+def test_fund_analysis_uses_dividend_reinvested_performance() -> None:
+    nav_points = [
+        FundNavPoint(date(2020, 1, 1), 1.0, 1.0, None, None, None),
+        FundNavPoint(date(2021, 1, 1), 2.0, 2.0, None, None, None),
+        FundNavPoint(date(2022, 1, 1), 1.5, 2.0, None, None, None),
+        FundNavPoint(date(2023, 1, 1), 1.5, 2.5, None, None, None),
+    ]
+
+    result = analyze_fund(
+        "000001",
+        nav_points,
+        name="Distribution Fund",
+        retrieved_at=datetime(2023, 1, 1, tzinfo=UTC),
+    )
+
+    assert result["performance"]["basis"] == "dividend_reinvested_nav"
+    assert result["performance"]["total_return"] == pytest.approx(5 / 3)
+    assert result["performance"]["max_drawdown"] == 0.0
+
+
 def test_index_proxy_assessment_standardizes_factors_and_applies_cap() -> None:
     result = {
         "asset_type": "fund",

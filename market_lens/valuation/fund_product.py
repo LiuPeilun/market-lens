@@ -12,6 +12,7 @@ from market_lens.types import (
     FundProductInfo,
     StockBar,
 )
+from market_lens.valuation.metrics import fund_performance_index
 from market_lens.valuation.scoring_config import FundProductModelKey
 
 
@@ -127,14 +128,10 @@ def calculate_tracking_metrics(
 def fund_returns(points: list[FundNavPoint]) -> dict[date, float]:
     returns: dict[date, float] = {}
     previous_value: float | None = None
-    for point in sorted(points, key=lambda item: item.date):
-        value = finite_positive(point.unit_nav)
-        if point.daily_growth_pct is not None and isfinite(point.daily_growth_pct):
-            returns[point.date] = float(point.daily_growth_pct) / 100.0
-        elif value is not None and previous_value is not None:
-            returns[point.date] = value / previous_value - 1
-        if value is not None:
-            previous_value = value
+    for point_date, value in fund_performance_index(points):
+        if previous_value is not None:
+            returns[point_date] = value / previous_value - 1
+        previous_value = value
     return returns
 
 
