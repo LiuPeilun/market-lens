@@ -5,7 +5,8 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from html import unescape
 from html.parser import HTMLParser
 from math import isfinite
@@ -55,6 +56,7 @@ class EastmoneyError(RuntimeError):
     pass
 
 
+CHINA_STANDARD_TIME = timezone(timedelta(hours=8))
 SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
 KNOWN_FUND_MANAGERS = (
     "易方达",
@@ -956,6 +958,19 @@ class EastmoneyClient:
         end: date,
         page_size: int = 200,
     ) -> list[FundNavPoint]:
+        normalized_code = normalize_fund_code(code)
+        overview_url = f"https://fund.eastmoney.com/pingzhongdata/{normalized_code}.js"
+        try:
+            overview = self._get_text(overview_url, ttl_seconds=24 * 60 * 60)
+            return parse_pingzhongdata_fund_nav(
+                overview,
+                expected_code=normalized_code,
+                start=start,
+                end=end,
+            )
+        except EastmoneyError:
+            pass
+
         first_page = self._get_fund_nav_page(code, start, end, page=1, page_size=page_size)
         pages = int(first_page.get("pages") or 1)
         rows = list(first_page["rows"])
@@ -2358,6 +2373,99 @@ def parse_pingzhongdata_fund_name(text: str) -> str | None:
     if not match:
         return None
     return repair_mojibake(match.group(1))
+
+
+def parse_pingzhongdata_fund_nav(
+    text: str,
+    *,
+    expected_code: str,
+    start: date,
+    end: date,
+) -> list[FundNavPoint]:
+    code_match = re.search(r'var\s+fS_code\s*=\s*"(\d{6})"', text)
+    if code_match is None or code_match.group(1) != normalize_fund_code(expected_code):
+        raise EastmoneyError("Eastmoney fund NAV overview code mismatch")
+
+    net_worth = _parse_pingzhongdata_json_array(text, "Data_netWorthTrend")
+    cumulative_worth = _parse_pingzhongdata_json_array(text, "Data_ACWorthTrend")
+    cumulative_by_timestamp: dict[int, float | None] = {}
+    for raw in cumulative_worth:
+        if not isinstance(raw, list | tuple) or len(raw) < 2:
+            continue
+        try:
+            timestamp_ms = int(raw[0])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        cumulative_by_timestamp[timestamp_ms] = to_float(raw[1])
+
+    points_by_date: dict[date, FundNavPoint] = {}
+    for raw in net_worth:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            timestamp_ms = int(raw["x"])
+            point_date = datetime.fromtimestamp(
+                timestamp_ms / 1000,
+                tz=CHINA_STANDARD_TIME,
+            ).date()
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            continue
+        unit_nav = to_float(raw.get("y"))
+        if unit_nav is None:
+            continue
+        daily_growth_pct = to_float(raw.get("equityReturn"))
+        if daily_growth_pct is not None:
+            daily_growth_pct = float(
+                Decimal(str(daily_growth_pct)).quantize(
+                    Decimal("0.01"),
+                    rounding=ROUND_HALF_UP,
+                )
+            )
+        points_by_date[point_date] = FundNavPoint(
+            date=point_date,
+            unit_nav=unit_nav,
+            cumulative_nav=cumulative_by_timestamp.get(timestamp_ms),
+            daily_growth_pct=daily_growth_pct,
+            subscribe_status=None,
+            redeem_status=None,
+        )
+
+    if not points_by_date:
+        raise EastmoneyError("Eastmoney fund NAV overview contains no usable rows")
+    points = [points_by_date[key] for key in sorted(points_by_date)]
+    first_movement = next(
+        (
+            index
+            for index, point in enumerate(points)
+            if point.daily_growth_pct not in {None, 0.0}
+        ),
+        len(points),
+    )
+    normalized_points = [
+        replace(point, daily_growth_pct=None) if index < first_movement else point
+        for index, point in enumerate(points)
+    ]
+    filtered_points = [point for point in normalized_points if start <= point.date <= end]
+    if not filtered_points:
+        raise EastmoneyError("Eastmoney fund NAV overview contains no rows in the requested range")
+    return filtered_points
+
+
+def _parse_pingzhongdata_json_array(text: str, variable: str) -> list[Any]:
+    match = re.search(
+        rf"var\s+{re.escape(variable)}\s*=\s*(\[.*?\]);",
+        text,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise EastmoneyError(f"Eastmoney fund NAV overview is missing {variable}")
+    try:
+        value = json.loads(match.group(1))
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise EastmoneyError(f"Eastmoney fund NAV overview has invalid {variable}") from exc
+    if not isinstance(value, list):
+        raise EastmoneyError(f"Eastmoney fund NAV overview has invalid {variable}")
+    return value
 
 
 def parse_fund_tracking_info(payload: dict[str, Any]) -> FundTrackingInfo:

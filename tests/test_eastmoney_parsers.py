@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import unquote
+
+import pytest
 
 from market_lens.data.eastmoney import (
     EastmoneyClient,
@@ -23,6 +25,7 @@ from market_lens.data.eastmoney import (
     parse_fund_product_info,
     parse_fund_tracking_info,
     parse_pingzhongdata_fund_name,
+    parse_pingzhongdata_fund_nav,
     parse_sina_index_history,
     parse_stock_dividend_plan,
     parse_stock_financial_indicator,
@@ -661,6 +664,11 @@ def test_get_fund_nav_uses_json_pagination(monkeypatch) -> None:
             "PageIndex": page,
         }
 
+    def unavailable_overview(url: str, ttl_seconds: int) -> str:
+        del url, ttl_seconds
+        raise EastmoneyError("overview unavailable")
+
+    monkeypatch.setattr(client, "_get_text", unavailable_overview)
     monkeypatch.setattr(client, "_get_json", fake_get_json)
     rows = client.get_fund_nav(
         "025856",
@@ -673,6 +681,56 @@ def test_get_fund_nav_uses_json_pagination(monkeypatch) -> None:
     assert len(requested_urls) == 2
     assert all("api.fund.eastmoney.com/f10/lsjz" in url for url in requested_urls)
     assert all("fundCode=025856" in url for url in requested_urls)
+
+
+def test_get_fund_nav_prefers_validated_single_request_overview(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    china_time = timezone(timedelta(hours=8))
+    first_timestamp = int(datetime(2026, 7, 19, tzinfo=china_time).timestamp() * 1000)
+    second_timestamp = int(datetime(2026, 7, 20, tzinfo=china_time).timestamp() * 1000)
+    overview = (
+        'var fS_name = "测试基金";\n'
+        'var fS_code = "025856";\n'
+        "var Data_netWorthTrend = "
+        f'[{{"x":{first_timestamp},"y":1.01,"equityReturn":0.1}},'
+        f'{{"x":{second_timestamp},"y":1.02,"equityReturn":0.435}}];\n'
+        f"var Data_ACWorthTrend = [[{first_timestamp},1.11],[{second_timestamp},1.12]];"
+    )
+
+    monkeypatch.setattr(client, "_get_text", lambda url, ttl_seconds: overview)
+    monkeypatch.setattr(
+        client,
+        "_get_json",
+        lambda url, ttl_seconds: pytest.fail("paginated NAV fallback should not be called"),
+    )
+
+    rows = client.get_fund_nav(
+        "025856",
+        start=date(2026, 7, 20),
+        end=date(2026, 7, 21),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].date == date(2026, 7, 20)
+    assert rows[0].unit_nav == 1.02
+    assert rows[0].cumulative_nav == 1.12
+    assert rows[0].daily_growth_pct == 0.44
+
+
+def test_parse_pingzhongdata_fund_nav_rejects_route_mismatch() -> None:
+    text = (
+        'var fS_code = "000001";'
+        "var Data_netWorthTrend = [];"
+        "var Data_ACWorthTrend = [];"
+    )
+
+    with pytest.raises(EastmoneyError, match="code mismatch"):
+        parse_pingzhongdata_fund_nav(
+            text,
+            expected_code="025856",
+            start=date(2026, 1, 1),
+            end=date(2026, 7, 21),
+        )
 
 
 def test_parse_fund_holdings_table() -> None:
