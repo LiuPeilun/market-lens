@@ -26,6 +26,22 @@ def test_to_sse_data_json_encodes_dates() -> None:
     assert payload == {"type": "meta", "analysis": {"as_of": "2026-07-03"}}
 
 
+def test_to_sse_data_preserves_structured_progress_event() -> None:
+    progress = {
+        "type": "progress",
+        "id": "tool:call-1",
+        "stage": "tool",
+        "status": "running",
+        "title": "正在查询 DeepWiki",
+        "detail": "mcp.deepwiki.ask_question",
+        "tool_name": "mcp.deepwiki.ask_question",
+    }
+
+    payload = json.loads(to_sse_data(progress).removeprefix("data: ").strip())
+
+    assert payload == progress
+
+
 def test_api_contract_accepts_v2_assessment_in_analysis_and_stream_meta() -> None:
     result = analysis_result_payload(include_assessment=True)
 

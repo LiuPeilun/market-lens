@@ -221,13 +221,28 @@ def test_chat_agent_streams_llm_answer() -> None:
         )
     )
 
-    assert events[0]["type"] == "meta"
-    assert events[0]["asset"]["code"] == "515450"
-    assert events[0]["analysis"]["assessment"]["overall_confidence"] == 0.5
-    assert events[1]["type"] == "citations"
-    events.pop(1)
-    assert events[1] == {"type": "token", "delta": "流式"}
-    assert events[2] == {"type": "token", "delta": "回答"}
+    progress = [event for event in events if event["type"] == "progress"]
+    meta = next(event for event in events if event["type"] == "meta")
+    tokens = [event for event in events if event["type"] == "token"]
+
+    assert meta["asset"]["code"] == "515450"
+    assert meta["analysis"]["assessment"]["overall_confidence"] == 0.5
+    assert tokens == [
+        {"type": "token", "delta": "流式"},
+        {"type": "token", "delta": "回答"},
+    ]
+    assert [(event["id"], event["status"]) for event in progress] == [
+        ("resolve_asset", "running"),
+        ("search_asset", "running"),
+        ("search_asset", "completed"),
+        ("resolve_asset", "completed"),
+        ("analyze_asset", "running"),
+        ("analyze_asset", "completed"),
+        ("planning:1", "running"),
+        ("planning:1", "completed"),
+        ("answer", "running"),
+        ("answer", "completed"),
+    ]
     assert events[-1] == {"type": "done"}
 
 

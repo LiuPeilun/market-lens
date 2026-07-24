@@ -160,7 +160,12 @@ def test_stream_preparation_executes_tools_before_final_stream() -> None:
         ],
         final_stream=["final ", "answer"],
     )
-    orchestrator = ToolOrchestrator(client, ToolExecutor(ToolRegistry([make_spec()])))
+    progress: list[dict[str, Any]] = []
+    orchestrator = ToolOrchestrator(
+        client,
+        ToolExecutor(ToolRegistry([make_spec()])),
+        progress_callback=progress.append,
+    )
 
     prepared = orchestrator.prepare_stream([{"role": "user", "content": "Question"}])
     streamed = list(client.stream_complete(prepared.messages))
@@ -168,3 +173,12 @@ def test_stream_preparation_executes_tools_before_final_stream() -> None:
     assert prepared.messages[-1]["role"] == "tool"
     assert streamed == ["final ", "answer"]
     assert prepared.traces[0].status == "success"
+    assert [(event["id"], event["status"]) for event in progress] == [
+        ("planning:1", "running"),
+        ("planning:1", "completed"),
+        ("tool:call-1", "running"),
+        ("tool:call-1", "completed"),
+        ("planning:2", "running"),
+        ("planning:2", "completed"),
+    ]
+    assert progress[2]["title"] == "正在调用工具"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -25,6 +26,8 @@ from market_lens.tools.models import (
     ToolResult,
     ToolStatus,
 )
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ class ToolOrchestrator:
         max_rounds: int | None = None,
         max_calls: int | None = None,
         max_result_chars: int | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.tool_executor = tool_executor
@@ -81,6 +85,7 @@ class ToolOrchestrator:
         self.max_rounds = max_rounds or settings.llm_tool_max_rounds
         self.max_calls = max_calls or settings.llm_tool_max_calls
         self.max_result_chars = max_result_chars or settings.llm_tool_result_max_chars
+        self.progress_callback = progress_callback
         if min(self.max_rounds, self.max_calls, self.max_result_chars) <= 0:
             raise ValueError("Tool orchestration limits must be greater than zero")
 
@@ -128,12 +133,25 @@ class ToolOrchestrator:
         if approved:
             if grant is None:
                 raise LLMError("Approved tool resumption requires an approval grant")
-            result = self.tool_executor.execute(
+            self._emit_tool_progress(
+                pending.tool_call_id,
                 pending.tool_name,
-                pending.arguments,
-                context=self.tool_context,
-                approval=grant,
+                "running",
             )
+            try:
+                result = self.tool_executor.execute(
+                    pending.tool_name,
+                    pending.arguments,
+                    context=self.tool_context,
+                    approval=grant,
+                )
+            except Exception:
+                self._emit_tool_progress(
+                    pending.tool_call_id,
+                    pending.tool_name,
+                    "failed",
+                )
+                raise
             if result.status is ToolStatus.CONFIRMATION_REQUIRED:
                 raise LLMError("Approval grant did not match the pending tool invocation")
         else:
@@ -145,6 +163,11 @@ class ToolOrchestrator:
                 message="The user denied this tool invocation",
             )
 
+        self._emit_tool_progress(
+            pending.tool_call_id,
+            pending.tool_name,
+            _progress_status(result),
+        )
         traces.append(_trace_from_result(result))
         messages.append(
             _tool_message(
@@ -191,8 +214,44 @@ class ToolOrchestrator:
             return StreamPreparation(messages=messages, traces=traces)
 
         while rounds_used < self.max_rounds:
-            turn = self.llm_client.complete_turn(messages, tools)
+            round_number = rounds_used + 1
+            self._emit_progress(
+                {
+                    "type": "progress",
+                    "id": f"planning:{round_number}",
+                    "stage": "planning",
+                    "status": "running",
+                    "title": "正在规划下一步",
+                }
+            )
+            try:
+                turn = self.llm_client.complete_turn(messages, tools)
+            except Exception:
+                self._emit_progress(
+                    {
+                        "type": "progress",
+                        "id": f"planning:{round_number}",
+                        "stage": "planning",
+                        "status": "failed",
+                        "title": "步骤规划失败",
+                    }
+                )
+                raise
             rounds_used += 1
+            self._emit_progress(
+                {
+                    "type": "progress",
+                    "id": f"planning:{round_number}",
+                    "stage": "planning",
+                    "status": "completed",
+                    "title": "已完成步骤规划",
+                    "detail": (
+                        f"将调用 {len(turn.tool_calls)} 个工具"
+                        if turn.tool_calls
+                        else "无需继续调用工具"
+                    ),
+                }
+            )
             if not turn.tool_calls:
                 return StreamPreparation(messages=messages, traces=traces, content=turn.content)
             calls_used, approval, deferred_calls = self._execute_turn(
@@ -267,14 +326,30 @@ class ToolOrchestrator:
                         error_code="unknown_tool_alias",
                     )
                 )
+                self._emit_progress(
+                    {
+                        "type": "progress",
+                        "id": f"tool:{call.id}",
+                        "stage": "tool",
+                        "status": "failed",
+                        "title": "工具调用失败",
+                        "detail": "模型请求了未开放的工具",
+                        "tool_name": call.name,
+                    }
+                )
                 messages.append(_tool_message(call.id, call.name, payload, self.max_result_chars))
                 continue
 
-            result = self.tool_executor.execute(
-                public_name,
-                call.arguments,
-                context=self.tool_context,
-            )
+            self._emit_tool_progress(call.id, public_name, "running")
+            try:
+                result = self.tool_executor.execute(
+                    public_name,
+                    call.arguments,
+                    context=self.tool_context,
+                )
+            except Exception:
+                self._emit_tool_progress(call.id, public_name, "failed")
+                raise
             traces.append(_trace_from_result(result))
             if result.status is ToolStatus.CONFIRMATION_REQUIRED:
                 spec = self.tool_executor.registry.get(public_name)
@@ -289,8 +364,18 @@ class ToolOrchestrator:
                     risk=spec.risk.value,
                     execution_target=spec.execution_target.value,
                 )
+                self._emit_tool_progress(
+                    call.id,
+                    public_name,
+                    "waiting_approval",
+                )
                 return calls_used, approval, turn.tool_calls[index + 1 :]
 
+            self._emit_tool_progress(
+                call.id,
+                public_name,
+                _progress_status(result),
+            )
             messages.append(
                 _tool_message(
                     call.id,
@@ -300,6 +385,67 @@ class ToolOrchestrator:
                 )
             )
         return calls_used, None, []
+
+    def _emit_progress(self, event: dict[str, Any]) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(event)
+
+    def _emit_tool_progress(
+        self,
+        call_id: str,
+        tool_name: str,
+        status: str,
+    ) -> None:
+        title, detail = _tool_progress_label(tool_name, status)
+        self._emit_progress(
+            {
+                "type": "progress",
+                "id": f"tool:{call_id}",
+                "stage": "tool",
+                "status": status,
+                "title": title,
+                "detail": detail,
+                "tool_name": tool_name,
+            }
+        )
+
+
+def _progress_status(result: ToolResult) -> str:
+    if result.status is ToolStatus.SUCCESS:
+        return "completed"
+    if result.status is ToolStatus.CONFIRMATION_REQUIRED:
+        return "waiting_approval"
+    return "failed"
+
+
+def _tool_progress_label(tool_name: str, status: str) -> tuple[str, str]:
+    if tool_name == "finance.search_assets":
+        action = "搜索市场标的"
+    elif tool_name == "finance.analyze_asset":
+        action = "获取市场数据并执行分析"
+    elif tool_name == "workspace.list_files":
+        action = "读取工作区文件列表"
+    elif tool_name == "workspace.read_file":
+        action = "读取工作区文件"
+    elif tool_name == "workspace.write_file":
+        action = "写入工作区文件"
+    elif tool_name.startswith("code."):
+        action = "执行沙箱任务"
+    elif tool_name.startswith("mcp.deepwiki."):
+        action = "查询 DeepWiki"
+    elif tool_name.startswith("mcp."):
+        server = tool_name.split(".", 2)[1]
+        action = f"查询 {server}"
+    else:
+        action = "调用工具"
+
+    if status == "completed":
+        return f"已完成{action}", tool_name
+    if status == "failed":
+        return f"{action}失败", tool_name
+    if status == "waiting_approval":
+        return f"{action}等待审批", tool_name
+    return f"正在{action}", tool_name
 
 
 def _assistant_tool_message(turn: LLMChatTurn) -> dict[str, Any]:

@@ -88,9 +88,14 @@ def test_chat_agent_pauses_then_resumes_exact_sandbox_tool_call() -> None:
     )
     approval_event = initial[-1]
     approval = approval_event["approval"]
+    initial_progress = [event for event in initial if event["type"] == "progress"]
 
     assert approval_event["type"] == "approval_required"
     assert runner.requests == []
+    assert [(event["id"], event["status"]) for event in initial_progress[-2:]] == [
+        ("tool:call-code", "running"),
+        ("tool:call-code", "waiting_approval"),
+    ]
 
     resumed = list(
         agent.resume_stream(
@@ -106,4 +111,9 @@ def test_chat_agent_pauses_then_resumes_exact_sandbox_tool_call() -> None:
 
     assert len(runner.requests) == 1
     assert "".join(event.get("delta", "") for event in resumed) == "计算结果是 42。"
+    resumed_progress = [event for event in resumed if event["type"] == "progress"]
+    assert [(event["id"], event["status"]) for event in resumed_progress[:2]] == [
+        ("tool:call-code", "running"),
+        ("tool:call-code", "completed"),
+    ]
     assert resumed[-1] == {"type": "done"}

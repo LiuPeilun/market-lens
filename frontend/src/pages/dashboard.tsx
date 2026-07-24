@@ -6,6 +6,8 @@ import ReactECharts from 'echarts-for-react'
 import {
   Activity,
   Check,
+  CheckCircle2,
+  Clock3,
   Database,
   Gauge,
   History as HistoryIcon,
@@ -13,6 +15,7 @@ import {
   LogOut,
   MessageCircle,
   PackageCheck,
+  LoaderCircle,
   RotateCcw,
   Search,
   Send,
@@ -22,6 +25,7 @@ import {
   TrendingDown,
   TrendingUp,
   X,
+  XCircle,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
@@ -46,6 +50,7 @@ import {
   type AssetSearchResult,
   type AssessmentDimension,
   type AnalysisResult,
+  type ChatProgressStep,
   type ChatStreamEvent,
   type ToolApproval,
   analyzeAsset,
@@ -77,6 +82,8 @@ interface ChatMessage {
   approval?: ToolApproval & {
     uiStatus?: 'pending' | 'resolving' | 'approved' | 'denied' | 'failed'
   }
+  progress?: ChatProgressStep[]
+  streamDone?: boolean
 }
 
 const defaultQuery: SubmittedQuery = {
@@ -287,7 +294,23 @@ export function DashboardPage() {
   }
 
   function handleChatStreamEvent(event: ChatStreamEvent, assistantMessageId: string) {
-    if (event.type === 'meta') {
+    if (event.type === 'progress') {
+      const step: ChatProgressStep = {
+        id: event.id,
+        stage: event.stage,
+        status: event.status,
+        title: event.title,
+        detail: event.detail,
+        tool_name: event.tool_name,
+      }
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? { ...item, progress: mergeProgressStep(item.progress, step) }
+            : item,
+        ),
+      )
+    } else if (event.type === 'meta') {
       if (event.session_id) setChatSessionId(event.session_id)
       setChatMessages((items) =>
         items.map((item) =>
@@ -338,7 +361,27 @@ export function DashboardPage() {
     } else if (event.type === 'error') {
       setChatMessages((items) =>
         items.map((item) =>
-          item.id === assistantMessageId ? { ...item, content: event.message } : item,
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                content: event.message,
+                progress: finishProgressSteps(item.progress, 'failed'),
+                streamDone: true,
+              }
+            : item,
+        ),
+      )
+    } else if (event.type === 'done') {
+      if (event.session_id) setChatSessionId(event.session_id)
+      setChatMessages((items) =>
+        items.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                progress: finishProgressSteps(item.progress, 'completed'),
+                streamDone: true,
+              }
+            : item,
         ),
       )
     }
@@ -355,7 +398,20 @@ export function DashboardPage() {
     setChatMessages((items) => [
       ...items,
       { id: crypto.randomUUID(), role: 'user', content: message },
-      { id: assistantMessageId, role: 'assistant', content: '' },
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        progress: [
+          {
+            id: 'resolve_asset',
+            stage: 'resolving',
+            status: 'running',
+            title: '正在连接智能体',
+          },
+        ],
+        streamDone: false,
+      },
     ])
     try {
       await streamChatWithAgent(
@@ -387,6 +443,8 @@ export function DashboardPage() {
             ? {
                 ...item,
                 content: error instanceof Error ? error.message : '问答请求失败。',
+                progress: finishProgressSteps(item.progress, 'failed'),
+                streamDone: true,
               }
             : item,
         ),
@@ -442,6 +500,7 @@ export function DashboardPage() {
                 ...item,
                 approval: { ...item.approval, uiStatus: 'pending' },
                 content: error instanceof Error ? error.message : '审批请求失败。',
+                progress: finishProgressSteps(item.progress, 'failed'),
               }
             : item,
         ),
@@ -673,6 +732,64 @@ export function DashboardPage() {
   )
 }
 
+function mergeProgressStep(
+  current: ChatProgressStep[] | undefined,
+  next: ChatProgressStep,
+): ChatProgressStep[] {
+  const steps = current ?? []
+  const existingIndex = steps.findIndex((step) => step.id === next.id)
+  if (existingIndex < 0) return [...steps, next]
+  return steps.map((step, index) => (index === existingIndex ? next : step))
+}
+
+function finishProgressSteps(
+  current: ChatProgressStep[] | undefined,
+  status: 'completed' | 'failed',
+): ChatProgressStep[] | undefined {
+  return current?.map((step) => (step.status === 'running' ? { ...step, status } : step))
+}
+
+function ChatProgress({ steps }: { steps: ChatProgressStep[] }) {
+  return (
+    <div aria-label="任务处理进度" className="grid gap-2">
+      {steps.map((step) => (
+        <div className="flex min-w-0 items-start gap-2" key={step.id}>
+          <ProgressStatusIcon status={step.status} />
+          <div className="min-w-0 flex-1">
+            <div
+              className={
+                step.status === 'running'
+                  ? 'font-medium text-foreground'
+                  : step.status === 'failed'
+                    ? 'font-medium text-destructive'
+                    : 'text-muted-foreground'
+              }
+            >
+              {step.title}
+            </div>
+            {step.detail ? (
+              <div className="mt-0.5 break-words text-xs text-muted-foreground">{step.detail}</div>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ProgressStatusIcon({ status }: { status: ChatProgressStep['status'] }) {
+  if (status === 'running') {
+    return <LoaderCircle className="mt-0.5 size-4 shrink-0 animate-spin text-primary" />
+  }
+  if (status === 'completed') {
+    return <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+  }
+  if (status === 'waiting_approval') {
+    return <Clock3 className="mt-0.5 size-4 shrink-0 text-amber-600" />
+  }
+  return <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+}
+
 function ChatPanel({
   input,
   isBusy,
@@ -715,7 +832,20 @@ function ChatPanel({
               }
               key={message.id}
             >
-              <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+              {message.role === 'assistant' && message.progress?.length ? (
+                <ChatProgress steps={message.progress} />
+              ) : null}
+              {message.content ? (
+                <div
+                  className={
+                    message.progress?.length
+                      ? 'mt-3 whitespace-pre-wrap border-t pt-3 leading-relaxed'
+                      : 'whitespace-pre-wrap leading-relaxed'
+                  }
+                >
+                  {message.content}
+                </div>
+              ) : null}
               {message.approval ? (
                 <div className="mt-3 grid gap-3 border-t pt-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -775,7 +905,6 @@ function ChatPanel({
               ) : null}
             </div>
           ))}
-          {isBusy ? <Skeleton className="h-16 w-4/5" /> : null}
         </div>
         <div className="grid content-between gap-4">
           <div className="rounded-md border bg-muted/20 p-4">

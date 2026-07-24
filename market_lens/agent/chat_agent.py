@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any, Literal
+from queue import Queue
+from threading import Thread
+from typing import Any, Literal, TypeVar
 
 from market_lens.agent.llm_client import (
     LLMError,
@@ -33,6 +35,8 @@ ChatIntent = Literal[
     "need_asset",
     "general_query",
 ]
+ProgressCallback = Callable[[dict[str, Any]], None]
+OperationResult = TypeVar("OperationResult")
 
 
 @dataclass(frozen=True)
@@ -103,10 +107,41 @@ class ChatAgent:
         context: ChatAssetContext | None,
         start: date,
         end: date,
+        *,
+        progress_callback: ProgressCallback | None = None,
     ) -> PreparedChatReply:
         normalized_message = message.strip()
         intent = classify_intent(normalized_message)
-        asset = self._resolve_asset(normalized_message, context)
+        _emit_progress(
+            progress_callback,
+            "resolve_asset",
+            "resolving",
+            "running",
+            "正在识别查询标的",
+        )
+        try:
+            asset = self._resolve_asset(
+                normalized_message,
+                context,
+                progress_callback=progress_callback,
+            )
+        except Exception:
+            _emit_progress(
+                progress_callback,
+                "resolve_asset",
+                "resolving",
+                "failed",
+                "识别查询标的失败",
+            )
+            raise
+        _emit_progress(
+            progress_callback,
+            "resolve_asset",
+            "resolving",
+            "completed",
+            "已完成请求识别",
+            "已识别查询标的" if asset is not None else "将按通用问题处理",
+        )
         if asset is None:
             if self.use_llm:
                 return PreparedChatReply(
@@ -131,17 +166,44 @@ class ChatAgent:
                 citations=[],
             )
 
-        tool_data = require_tool_data(
-            self.tool_executor.execute(
-                ANALYZE_ASSET_TOOL,
-                {
-                    "asset_type": asset.asset_type,
-                    "code": asset.code,
-                    "start": start,
-                    "end": end,
-                },
-                context=self.tool_context,
+        _emit_progress(
+            progress_callback,
+            "analyze_asset",
+            "analysis",
+            "running",
+            "正在获取市场数据并执行估值分析",
+            f"{asset.name}（{asset.code}）" if asset.name else asset.code,
+        )
+        try:
+            tool_data = require_tool_data(
+                self.tool_executor.execute(
+                    ANALYZE_ASSET_TOOL,
+                    {
+                        "asset_type": asset.asset_type,
+                        "code": asset.code,
+                        "start": start,
+                        "end": end,
+                    },
+                    context=self.tool_context,
+                )
             )
+        except Exception:
+            _emit_progress(
+                progress_callback,
+                "analyze_asset",
+                "analysis",
+                "failed",
+                "市场数据或估值分析失败",
+                asset.code,
+            )
+            raise
+        _emit_progress(
+            progress_callback,
+            "analyze_asset",
+            "analysis",
+            "completed",
+            "已完成市场数据与估值分析",
+            asset.code,
         )
         analysis = tool_data["result"]
         asset_payload = {
@@ -174,7 +236,15 @@ class ChatAgent:
         start: date,
         end: date,
     ) -> Iterator[dict[str, Any]]:
-        prepared = self.prepare_reply(message, context, start, end)
+        prepared = yield from _stream_operation(
+            lambda progress_callback: self.prepare_reply(
+                message,
+                context,
+                start,
+                end,
+                progress_callback=progress_callback,
+            )
+        )
         yield {
             "type": "meta",
             "intent": prepared.intent,
@@ -184,15 +254,20 @@ class ChatAgent:
             "citations": prepared.citations,
         }
         if prepared.llm_messages is None or not self.use_llm:
+            yield _progress_event("answer", "answer", "running", "正在整理回答")
             yield {"type": "token", "delta": prepared.answer}
+            yield _progress_event("answer", "answer", "completed", "已完成回答")
             yield {"type": "done"}
             return
         try:
-            orchestration = ToolOrchestrator(
-                self.llm_client,
-                self.tool_executor,
-                self.tool_context,
-            ).prepare_stream(prepared.llm_messages)
+            orchestration = yield from _stream_operation(
+                lambda progress_callback: ToolOrchestrator(
+                    self.llm_client,
+                    self.tool_executor,
+                    self.tool_context,
+                    progress_callback=progress_callback,
+                ).prepare_stream(prepared.llm_messages)
+            )
             prepared.citations.extend(_tool_citations(orchestration.traces))
             if orchestration.approval is not None:
                 yield {
@@ -203,15 +278,24 @@ class ChatAgent:
                 }
                 return
             yield {"type": "citations", "citations": prepared.citations}
+            yield _progress_event("answer", "answer", "running", "正在生成回答")
             emitted = False
             for delta in self.llm_client.stream_complete(orchestration.messages):
                 emitted = True
                 yield {"type": "token", "delta": delta}
             if not emitted:
                 yield {"type": "token", "delta": prepared.answer}
+            yield _progress_event("answer", "answer", "completed", "已完成回答")
         except LLMError:
             prepared.citations.append("LLM 流式生成失败，已回退到规则模板回答。")
+            yield _progress_event("answer", "answer", "running", "正在整理规则分析结果")
             yield {"type": "token", "delta": prepared.answer}
+            yield _progress_event(
+                "answer",
+                "answer",
+                "completed",
+                "已使用规则分析结果完成回答",
+            )
         yield {"type": "done"}
 
     def resume_stream(
@@ -222,11 +306,14 @@ class ChatAgent:
         grant: ToolApprovalGrant | None = None,
     ) -> Iterator[dict[str, Any]]:
         try:
-            orchestration = ToolOrchestrator(
-                self.llm_client,
-                self.tool_executor,
-                self.tool_context,
-            ).resume_stream(checkpoint, approved=approved, grant=grant)
+            orchestration = yield from _stream_operation(
+                lambda progress_callback: ToolOrchestrator(
+                    self.llm_client,
+                    self.tool_executor,
+                    self.tool_context,
+                    progress_callback=progress_callback,
+                ).resume_stream(checkpoint, approved=approved, grant=grant)
+            )
             citations = _tool_citations(orchestration.traces)
             if orchestration.approval is not None:
                 yield {
@@ -237,8 +324,10 @@ class ChatAgent:
                 }
                 return
             yield {"type": "citations", "citations": citations}
+            yield _progress_event("answer", "answer", "running", "正在生成回答")
             for delta in self.llm_client.stream_complete(orchestration.messages):
                 yield {"type": "token", "delta": delta}
+            yield _progress_event("answer", "answer", "completed", "已完成回答")
         except LLMError as exc:
             yield {"type": "error", "message": str(exc)}
             return
@@ -268,6 +357,8 @@ class ChatAgent:
         self,
         message: str,
         context: ChatAssetContext | None,
+        *,
+        progress_callback: ProgressCallback | None = None,
     ) -> ChatAssetContext | None:
         code = extract_code(message)
         if code:
@@ -278,14 +369,41 @@ class ChatAgent:
 
         keyword = extract_asset_keyword(message)
         if keyword:
-            tool_data = require_tool_data(
-                self.tool_executor.execute(
-                    SEARCH_ASSETS_TOOL,
-                    {"keyword": keyword, "limit": 5},
-                    context=self.tool_context,
-                )
+            _emit_progress(
+                progress_callback,
+                "search_asset",
+                "search",
+                "running",
+                "正在搜索股票和基金",
+                keyword,
             )
+            try:
+                tool_data = require_tool_data(
+                    self.tool_executor.execute(
+                        SEARCH_ASSETS_TOOL,
+                        {"keyword": keyword, "limit": 5},
+                        context=self.tool_context,
+                    )
+                )
+            except Exception:
+                _emit_progress(
+                    progress_callback,
+                    "search_asset",
+                    "search",
+                    "failed",
+                    "搜索股票和基金失败",
+                    keyword,
+                )
+                raise
             candidates = tool_data["items"]
+            _emit_progress(
+                progress_callback,
+                "search_asset",
+                "search",
+                "completed",
+                "已完成股票和基金搜索",
+                f"找到 {len(candidates)} 个候选标的",
+            )
             if candidates:
                 candidate = candidates[0]
                 return ChatAssetContext(
@@ -295,6 +413,71 @@ class ChatAgent:
                 )
 
         return context
+
+
+def _stream_operation(
+    operation: Callable[[ProgressCallback], OperationResult],
+) -> Generator[dict[str, Any], None, OperationResult]:
+    events: Queue[object] = Queue()
+    sentinel = object()
+    result: list[OperationResult] = []
+    error: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(operation(events.put))
+        except BaseException as exc:
+            error.append(exc)
+        finally:
+            events.put(sentinel)
+
+    worker = Thread(target=run, daemon=True)
+    worker.start()
+    while True:
+        event = events.get()
+        if event is sentinel:
+            break
+        if isinstance(event, dict):
+            yield event
+    worker.join()
+    if error:
+        raise error[0]
+    return result[0]
+
+
+def _progress_event(
+    step_id: str,
+    stage: str,
+    status: str,
+    title: str,
+    detail: str | None = None,
+    *,
+    tool_name: str | None = None,
+) -> dict[str, Any]:
+    event: dict[str, Any] = {
+        "type": "progress",
+        "id": step_id,
+        "stage": stage,
+        "status": status,
+        "title": title,
+    }
+    if detail:
+        event["detail"] = detail
+    if tool_name:
+        event["tool_name"] = tool_name
+    return event
+
+
+def _emit_progress(
+    callback: ProgressCallback | None,
+    step_id: str,
+    stage: str,
+    status: str,
+    title: str,
+    detail: str | None = None,
+) -> None:
+    if callback is not None:
+        callback(_progress_event(step_id, stage, status, title, detail))
 
 
 def classify_intent(message: str) -> ChatIntent:

@@ -44,6 +44,15 @@ export interface ToolApproval {
   expires_at: string
 }
 
+export interface ChatProgressStep {
+  id: string
+  stage: 'resolving' | 'search' | 'analysis' | 'planning' | 'tool' | 'answer'
+  status: 'running' | 'completed' | 'failed' | 'waiting_approval'
+  title: string
+  detail?: string
+  tool_name?: string
+}
+
 export type ChatStreamEvent =
   | {
       type: 'meta'
@@ -54,6 +63,7 @@ export type ChatStreamEvent =
       citations: string[]
       session_id?: string
     }
+  | ({ type: 'progress' } & ChatProgressStep)
   | { type: 'token'; delta: string }
   | { type: 'citations'; citations: string[] }
   | {
