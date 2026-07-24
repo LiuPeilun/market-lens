@@ -209,7 +209,7 @@ export function DashboardPage() {
       },
       yAxis: {
         axisLine: { lineStyle: { color: '#cbd5e1' } },
-        axisLabel: showFundPerformance ? { formatter: '{value}%' } : undefined,
+        axisLabel: { formatter: showFundPerformance ? '{value}%' : '{value}' },
         scale: true,
         type: 'value',
       },
@@ -723,7 +723,11 @@ export function DashboardPage() {
                 {isBusy ? (
                   <Skeleton className="h-full w-full" />
                 ) : (
-                  <ReactECharts option={chartOption} style={{ height: '100%', width: '100%' }} />
+                  <ReactECharts
+                    notMerge
+                    option={chartOption}
+                    style={{ height: '100%', width: '100%' }}
+                  />
                 )}
               </div>
             </CardContent>
