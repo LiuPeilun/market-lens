@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -8,9 +8,12 @@ from market_lens.types import (
     CsiIndexConstituentWeight,
     CsiIndexValuationPoint,
     FundHoldingsRoute,
+    FundNavPoint,
+    FundProductInfo,
     FundTrackingInfo,
 )
 from market_lens.valuation.index_data import (
+    analyze_csi_index_valuation,
     build_csi_fund_index_data_route,
     index_names_match,
     serialize_fund_index_data_route,
@@ -74,6 +77,18 @@ def constituent_weights(
             exchange="Shenzhen",
             weight_pct=45.0,
         ),
+    ]
+
+
+def valuation_history(
+    count: int,
+    *,
+    end: date = date(2026, 7, 24),
+) -> list[CsiIndexValuationPoint]:
+    start = end - timedelta(days=count - 1)
+    return [
+        valuation_point(start + timedelta(days=index))
+        for index in range(count)
     ]
 
 
@@ -170,4 +185,178 @@ def test_market_agent_index_route_fails_closed_before_requesting_weights() -> No
     assert route.scoring_eligible is False
     assert route.fallback_reasons == (
         "official_index_valuation_unavailable: no official route for 000300",
+    )
+
+
+def test_official_index_valuation_scores_only_long_pe_history() -> None:
+    route = build_csi_fund_index_data_route(
+        tracking_info(),
+        valuation_history(600),
+        constituent_weights(),
+        analysis_end=date(2026, 7, 24),
+    )
+
+    result = analyze_csi_index_valuation(
+        route,
+        fund_name="沪深300ETF",
+        analysis_end=date(2026, 7, 24),
+    )
+
+    assert result["method"] == "official_index_fundamental_percentile"
+    assert result["profile"] == "csi_index_fundamental"
+    assert result["score"] == 100.0
+    assert result["factor_coverage"] == 0.6
+    assert result["confidence"] <= 0.6
+    assert result["missing_factors"] == [
+        "index_pb_percentile",
+        "index_dividend_yield_percentile",
+    ]
+    assert result["factors"][0]["sample_size"] == 600  # type: ignore[index]
+
+
+def test_dividend_low_vol_index_has_lower_coverage_and_confidence_cap() -> None:
+    route = build_csi_fund_index_data_route(
+        tracking_info(),
+        valuation_history(600),
+        constituent_weights(),
+        analysis_end=date(2026, 7, 24),
+    )
+
+    result = analyze_csi_index_valuation(
+        route,
+        fund_name="中证红利低波ETF",
+        analysis_end=date(2026, 7, 24),
+    )
+
+    assert result["profile"] == "csi_dividend_low_volatility_index"
+    assert result["factor_coverage"] == 0.35
+    assert result["confidence"] <= 0.45
+
+
+def test_official_index_valuation_requires_two_year_history() -> None:
+    route = build_csi_fund_index_data_route(
+        tracking_info(),
+        valuation_history(503),
+        constituent_weights(),
+        analysis_end=date(2026, 7, 24),
+    )
+
+    result = analyze_csi_index_valuation(
+        route,
+        fund_name="沪深300ETF",
+        analysis_end=date(2026, 7, 24),
+    )
+
+    assert result["score"] is None
+    assert result["confidence"] == 0.0
+    assert result["status"] == "official_index_history_insufficient"
+
+
+def test_market_agent_prefers_official_index_fundamentals() -> None:
+    tracking = tracking_info()
+    holdings_route = FundHoldingsRoute(
+        holdings=[],
+        source="csindex_official",
+        scope="tracked_index_top10",
+        as_of=date(2026, 6, 30),
+        coverage=0.4,
+        tracking=tracking,
+    )
+
+    class OfficialClient:
+        def get_fund_product_info(self, code: str) -> FundProductInfo:
+            return FundProductInfo(
+                fund_code=code,
+                fund_name="沪深300ETF",
+                fund_type="指数型-股票",
+                establishment_date=date(2012, 5, 4),
+                scale_report_date=date(2026, 6, 30),
+                period_end_net_assets_cny=100_000_000_000.0,
+                management_fee_pct=0.15,
+                custody_fee_pct=0.05,
+                sales_service_fee_pct=None,
+                benchmark="沪深300指数",
+                raw={},
+            )
+
+        def get_exchange_fund_price_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            return [
+                FundNavPoint(
+                    date=start,
+                    unit_nav=4.0,
+                    cumulative_nav=4.0,
+                    daily_growth_pct=None,
+                    subscribe_status=None,
+                    redeem_status=None,
+                ),
+                FundNavPoint(
+                    date=end,
+                    unit_nav=4.2,
+                    cumulative_nav=4.2,
+                    daily_growth_pct=5.0,
+                    subscribe_status=None,
+                    redeem_status=None,
+                ),
+            ]
+
+        def get_fund_name(self, code: str) -> str:
+            return "沪深300ETF"
+
+        def get_fund_holdings_route(
+            self,
+            code: str,
+            *,
+            fund_name: str | None,
+        ) -> FundHoldingsRoute:
+            return holdings_route
+
+        def get_csi_index_valuation_history(
+            self,
+            index_code: str,
+        ) -> list[CsiIndexValuationPoint]:
+            return valuation_history(600)
+
+        def get_csi_index_full_weights(
+            self,
+            index_code: str,
+        ) -> list[CsiIndexConstituentWeight]:
+            return constituent_weights()
+
+        def search_assets(
+            self,
+            keyword: str,
+            *,
+            limit: int,
+            include_indexes: bool,
+        ) -> list[object]:
+            return []
+
+    result = MarketAnalysisAgent(OfficialClient()).analyze(  # type: ignore[arg-type]
+        "fund",
+        "510300",
+        date(2026, 1, 2),
+        date(2026, 7, 24),
+    )
+
+    assert result["valuation"]["method"] == "official_index_fundamental_percentile"
+    assert result["valuation"]["score"] == 100.0
+    assert result["valuation"]["product_data"]["profile"] == "etf"
+    assert result["index_data_route"]["scoring_eligible"] is True
+    assert result["assessment"]["dimensions"]["valuation"]["model"] == (
+        "csi_index_fundamental_v1"
+    )
+    assert result["assessment"]["dimensions"]["valuation"]["confidence"] <= 0.6
+    assert not any(
+        note.startswith("Holding-level valuation uses")
+        for note in result["notes"]
+    )
+    assert any(
+        "used only for the separate underlying-quality dimension" in note
+        for note in result["notes"]
     )

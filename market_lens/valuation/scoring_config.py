@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 SCHEMA_VERSION = "2"
-MODEL_VERSION = "valuation-v2.2.0-fund-product-models"
+MODEL_VERSION = "valuation-v2.3.0-csi-index-fundamentals"
 
 DimensionCategory = Literal["valuation", "quality", "product"]
 FactorDirection = Literal["higher_value_higher_score", "lower_value_higher_score"]
@@ -499,6 +499,9 @@ FUND_VALUATION_FACTOR_DIRECTIONS: dict[str, FactorDirection] = {
     "peer_pe_percentile": "higher_value_higher_score",
     "dividend_yield": "lower_value_higher_score",
     "index_price_percentile": "higher_value_higher_score",
+    "index_pe_ttm_percentile": "higher_value_higher_score",
+    "index_pb_percentile": "higher_value_higher_score",
+    "index_dividend_yield_percentile": "lower_value_higher_score",
 }
 
 LEGACY_FUND_FACTOR_WEIGHTS: dict[str, dict[str, float]] = {
@@ -515,4 +518,14 @@ LEGACY_FUND_FACTOR_WEIGHTS: dict[str, dict[str, float]] = {
         "peer_pe_percentile": 0.15,
     },
     "index_etf": {"index_price_percentile": 1.0},
+    "csi_index_fundamental": {
+        "index_pe_ttm_percentile": 0.60,
+        "index_pb_percentile": 0.25,
+        "index_dividend_yield_percentile": 0.15,
+    },
+    "csi_dividend_low_volatility_index": {
+        "index_pe_ttm_percentile": 0.35,
+        "index_pb_percentile": 0.25,
+        "index_dividend_yield_percentile": 0.40,
+    },
 }

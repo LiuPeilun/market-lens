@@ -386,8 +386,13 @@ def build_fund_assessment(
     score = valuation.get("score")
     level = valuation_level(score)
     confidence = float(valuation.get("confidence") or 0.0)
+    valuation_status = str(valuation.get("status") or "")
     valuation_dimension = {
-        "model": "legacy_fund_valuation_v1",
+        "model": (
+            "csi_index_fundamental_v1"
+            if valuation_status == "official_index_fundamental_valuation"
+            else "legacy_fund_valuation_v1"
+        ),
         "score": score,
         "level": level,
         "level_zh": LEVEL_LABELS_ZH[level],
@@ -404,7 +409,18 @@ def build_fund_assessment(
     product_data = valuation.get("product_data") or {}
     product_diagnostic = product_data.get("diagnostic") or {}
     holdings_route = valuation.get("holdings_route") or result.get("holdings_route") or {}
-    method_quality = 0.6 if valuation.get("status") == "proxy_valuation" else 1.0
+    index_data_route = (
+        valuation.get("index_data_route") or result.get("index_data_route") or {}
+    )
+    if valuation_status == "proxy_valuation":
+        method_quality = 0.6
+        valuation_caps = [("index_price_proxy", 0.6)]
+    elif valuation_status == "official_index_fundamental_valuation":
+        method_quality = 0.85
+        valuation_caps = [("single_scored_index_factor", 0.6)]
+    else:
+        method_quality = 1.0
+        valuation_caps = None
     route_quality = fund_route_quality(holdings_route, valuation)
     valuation_confidence = calculate_confidence(
         {
@@ -413,9 +429,7 @@ def build_fund_assessment(
             "route_quality": route_quality,
             "method_quality": method_quality,
         },
-        caps=[("index_price_proxy", 0.6)]
-        if valuation.get("status") == "proxy_valuation"
-        else None,
+        caps=valuation_caps,
     )
     valuation_dimension["legacy_confidence"] = confidence
     valuation_dimension["confidence"] = min(confidence, valuation_confidence["score"])
@@ -486,16 +500,36 @@ def build_fund_assessment(
         "quality": quality_dimension,
         "product": product_dimension,
     }
+    valuation_source = (
+        index_data_route.get("source")
+        if valuation_status == "official_index_fundamental_valuation"
+        else holdings_route.get("source") or result.get("data_source")
+    )
+    valuation_scope = (
+        index_data_route.get("scope")
+        if valuation_status == "official_index_fundamental_valuation"
+        else holdings_route.get("scope")
+    )
+    valuation_coverage = (
+        index_data_route.get("weight_coverage")
+        if valuation_status == "official_index_fundamental_valuation"
+        else holdings_route.get("coverage")
+    )
+    valuation_reasons = (
+        index_data_route.get("fallback_reasons")
+        if valuation_status == "official_index_fundamental_valuation"
+        else holdings_route.get("fallback_reasons")
+    )
     sources = [
         {
             "key": "fund_valuation_route",
-            "source": holdings_route.get("source") or result.get("data_source"),
+            "source": valuation_source,
             "status": "available" if score is not None else "partial",
             "source_as_of": source_as_of.isoformat() if source_as_of else None,
             "retrieved_at": utc_isoformat(retrieved_at),
-            "scope": holdings_route.get("scope"),
-            "coverage": holdings_route.get("coverage"),
-            "reasons": holdings_route.get("fallback_reasons") or [],
+            "scope": valuation_scope,
+            "coverage": valuation_coverage,
+            "reasons": valuation_reasons or [],
         },
         {"key": "fund_product", **product_diagnostic},
         {
@@ -781,25 +815,29 @@ def standardize_legacy_factors(
             "name": item.get("name"),
             "category": "valuation",
             "value": item.get("value"),
-            "unit": legacy_factor_unit(str(item.get("key") or "")),
+            "unit": item.get("unit")
+            or legacy_factor_unit(str(item.get("key") or "")),
+            "percentile": item.get("percentile"),
             "source_as_of": source_as_of.isoformat() if source_as_of else None,
             "score": item.get("score"),
             "direction": FUND_VALUATION_FACTOR_DIRECTIONS.get(
                 str(item.get("key") or ""), "higher_value_higher_score"
             ),
-            "normalization": "legacy_valuation_rule",
+            "normalization": item.get("normalization") or "legacy_valuation_rule",
             "weight": float(item.get("weight") or 0.0),
             "effective_weight": (
                 float(item.get("weight") or 0.0) / available_weight
                 if available_weight
                 else 0.0
             ),
-            "sample_size": legacy_factor_sample_size(valuation),
+            "sample_size": int(
+                item.get("sample_size") or legacy_factor_sample_size(valuation)
+            ),
             "coverage": legacy_factor_coverage(item),
-            "source": legacy_factor_source(valuation),
+            "source": item.get("source") or legacy_factor_source(valuation),
             "status": "available",
             "eligible": item.get("score") is not None,
-            "warnings": ["legacy_compatibility_factor"],
+            "warnings": item.get("warnings") or ["legacy_compatibility_factor"],
         }
         for item in available
     ]
@@ -858,6 +896,17 @@ def fund_source_as_of(valuation: dict[str, Any]) -> date | None:
 def fund_route_quality(route: dict[str, Any], valuation: dict[str, Any]) -> float:
     if valuation.get("status") == "proxy_valuation":
         return 0.6
+    if valuation.get("status") == "official_index_fundamental_valuation":
+        index_data_route = valuation.get("index_data_route") or {}
+        if (
+            index_data_route.get("status") == "available"
+            and index_data_route.get("scoring_eligible") is True
+        ):
+            return max(
+                0.1,
+                min(float(index_data_route.get("weight_coverage") or 0.0), 1.0),
+            )
+        return 0.0
     scope = route.get("scope")
     if scope in {"tracked_index_top10", "target_etf_top10", "fund_direct_top10"}:
         return max(0.1, min(float(route.get("coverage") or 0.0), 1.0))
@@ -865,11 +914,11 @@ def fund_route_quality(route: dict[str, Any], valuation: dict[str, Any]) -> floa
 
 
 def legacy_factor_source(valuation: dict[str, Any]) -> str:
-    return (
-        "tracked_index_price_history"
-        if valuation.get("status") == "proxy_valuation"
-        else "fund_disclosed_holdings"
-    )
+    if valuation.get("status") == "proxy_valuation":
+        return "tracked_index_price_history"
+    if valuation.get("status") == "official_index_fundamental_valuation":
+        return "csindex_official"
+    return "fund_disclosed_holdings"
 
 
 def legacy_factor_sample_size(valuation: dict[str, Any]) -> int:

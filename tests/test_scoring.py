@@ -206,7 +206,7 @@ def test_scoring_is_reproducible_for_same_version_and_input() -> None:
     first = score_dimension(definitions, observations)
     second = score_dimension(definitions, observations)
 
-    assert MODEL_VERSION == "valuation-v2.2.0-fund-product-models"
+    assert MODEL_VERSION == "valuation-v2.3.0-csi-index-fundamentals"
     assert first == second
 
 

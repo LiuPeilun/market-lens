@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -29,6 +30,7 @@ from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.assessment import build_fund_assessment
 from market_lens.valuation.framework import analyze_index_price_proxy
 from market_lens.valuation.index_data import (
+    analyze_csi_index_valuation,
     build_csi_fund_index_data_route,
     serialize_fund_index_data_route,
     unavailable_fund_index_data_route,
@@ -212,7 +214,28 @@ class MarketAnalysisAgent:
             route_metadata = serialize_holdings_route(holdings_route)
             result["holdings_route"] = route_metadata
             result["valuation"]["holdings_route"] = route_metadata
-            result["notes"].insert(0, holdings_route_note(holdings_route))
+
+            official_index_valuation = analyze_csi_index_valuation(
+                index_data_route,
+                fund_name=fund_name,
+                analysis_end=end,
+            ) if index_data_route.scope != "unavailable" else None
+            official_index_valuation_used = bool(
+                official_index_valuation
+                and official_index_valuation.get("score") is not None
+            )
+            if official_index_valuation_used and official_index_valuation is not None:
+                previous_valuation = result["valuation"]
+                result["valuation"] = official_index_valuation
+                preserve_fund_valuation_context(
+                    result["valuation"],
+                    previous_valuation,
+                    route_metadata,
+                )
+                index_data_route = replace(
+                    index_data_route,
+                    scoring_eligible=True,
+                )
 
             if result["valuation"].get("score") is None:
                 if index_candidate is None:
@@ -238,21 +261,18 @@ class MarketAnalysisAgent:
                     and index_bars
                     and benchmark_source in index_proxy_sources
                 ):
-                    product_data = result["valuation"].get("product_data")
-                    portfolio = result["valuation"].get("portfolio")
-                    holdings_summary = result["valuation"].get("holdings")
+                    previous_valuation = result["valuation"]
                     result["valuation"] = analyze_index_price_proxy(
                         index_bars=index_bars,
                         index_code=index_candidate.code,
                         index_name=index_candidate.name,
                         index_quote_id=index_candidate.quote_id,
                     )
-                    result["valuation"]["holdings_route"] = route_metadata
-                    result["valuation"]["product_data"] = product_data
-                    if portfolio is not None:
-                        result["valuation"]["portfolio"] = portfolio
-                    if holdings_summary is not None:
-                        result["valuation"]["holdings"] = holdings_summary
+                    preserve_fund_valuation_context(
+                        result["valuation"],
+                        previous_valuation,
+                        route_metadata,
+                    )
             if fund_data_source == "exchange_price_history":
                 result["notes"].insert(
                     0,
@@ -266,13 +286,20 @@ class MarketAnalysisAgent:
             index_data_metadata = serialize_fund_index_data_route(index_data_route)
             result["index_data_route"] = index_data_metadata
             result["valuation"]["index_data_route"] = index_data_metadata
-            if index_data_route.scope != "unavailable":
+            if official_index_valuation_used:
+                result["notes"] = official_index_valuation_notes(result["notes"])
                 result["notes"].insert(
                     0,
-                    "Official CSI index fundamentals and complete monthly constituent weights "
-                    "passed deterministic routing checks; they remain read-only until the "
-                    "index factor model is enabled.",
+                    "Valuation uses the tracked index's official CSI PE TTM historical "
+                    "percentile; complete monthly constituent weights validate index coverage.",
                 )
+                result["notes"].insert(
+                    1,
+                    "Disclosed top holdings are used only for the separate underlying-quality "
+                    "dimension and do not determine the index valuation score.",
+                )
+            else:
+                result["notes"].insert(0, holdings_route_note(holdings_route))
             result["assessment"] = build_fund_assessment(
                 result,
                 retrieved_at=retrieved_at,
@@ -669,6 +696,36 @@ class MarketAnalysisAgent:
         except (EastmoneyError, ValueError) as exc:
             return None, str(exc)
         return snapshot, None
+
+
+def preserve_fund_valuation_context(
+    target: dict[str, Any],
+    previous: dict[str, Any],
+    holdings_route: dict[str, Any],
+) -> None:
+    target["holdings_route"] = holdings_route
+    target["product_data"] = previous.get("product_data")
+    for key in ("portfolio", "holdings"):
+        if previous.get(key) is not None:
+            target[key] = previous[key]
+
+
+def official_index_valuation_notes(notes: list[str]) -> list[str]:
+    obsolete = (
+        "Holding-level valuation uses the latest disclosed top holdings "
+        "and their reported weights."
+    )
+    quality_warning = "Low top-holdings coverage or an old report date lowers confidence."
+    return [
+        (
+            "Low top-holdings coverage or an old report date lowers only the separate "
+            "underlying-quality confidence."
+            if note == quality_warning
+            else note
+        )
+        for note in notes
+        if note != obsolete
+    ]
 
 
 def is_supported_holding_stock(code: str) -> bool:

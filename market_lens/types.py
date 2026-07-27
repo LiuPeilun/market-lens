@@ -443,7 +443,7 @@ class FundIndexDataRoute:
     weights_as_of: date | None
     coverage: float
     fallback_reasons: tuple[str, ...] = ()
-    scoring_eligible: bool = field(default=False, init=False)
+    scoring_eligible: bool = False
 
 
 @dataclass(frozen=True)
