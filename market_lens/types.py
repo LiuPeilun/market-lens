@@ -212,6 +212,36 @@ class StockIndustryValuationSnapshot:
 
 
 @dataclass(frozen=True)
+class CsiIndexValuationPoint:
+    date: date
+    index_code: str
+    index_name: str
+    pe_ttm: float | None
+    pe_static_total_capital: float | None
+    pe_static_calculation_capital: float | None
+    pb: float | None
+    dividend_yield_total_capital_pct: float | None
+    dividend_yield_calculation_capital_pct: float | None
+    source: str
+    raw: dict[str, Any]
+    scoring_eligible: bool = field(default=False, init=False)
+
+
+@dataclass(frozen=True)
+class CsiIndexConstituentWeight:
+    rank: int
+    report_date: date
+    index_code: str
+    index_name: str
+    security_code: str
+    security_name: str
+    exchange: str
+    weight_pct: float
+    source: str = "csindex_official_closeweight"
+    scoring_eligible: bool = field(default=False, init=False)
+
+
+@dataclass(frozen=True)
 class StockProfile:
     code: str
     name: str | None

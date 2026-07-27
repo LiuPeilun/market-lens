@@ -14,9 +14,13 @@ from market_lens.data.eastmoney import (
     infer_exchange_fund_secid,
     infer_secid,
     is_a_share_symbol,
+    merge_csi_index_valuation_points,
     parse_asset_search_row,
     parse_cash_per_share,
+    parse_csi_index_indicator_rows,
+    parse_csi_index_pe_ttm_history,
     parse_csi_index_top_holdings,
+    parse_csi_index_weight_rows,
     parse_fund_archives_content,
     parse_fund_holdings_table,
     parse_fund_nav_row,
@@ -116,24 +120,14 @@ def test_tencent_stock_history_uses_year_chunks_and_deduplicates(monkeypatch) ->
         row_date = "2020-12-31" if "2020-12-31" in decoded else "2021-01-04"
         return {
             "code": 0,
-            "data": {
-                "sz000069": {
-                    "qfqday": [
-                        [row_date, "7.0", "7.1", "7.2", "6.9", "1000"]
-                    ]
-                }
-            },
+            "data": {"sz000069": {"qfqday": [[row_date, "7.0", "7.1", "7.2", "6.9", "1000"]]}},
         }
 
     monkeypatch.setattr(client, "_get_json", fake_get_json)
-    rows = client.get_tencent_stock_history(
-        "000069", date(2020, 12, 1), date(2021, 1, 31)
-    )
+    rows = client.get_tencent_stock_history("000069", date(2020, 12, 1), date(2021, 1, 31))
 
     assert tencent_stock_symbol("000069") == "sz000069"
-    assert stock_history_year_chunks(
-        date(2020, 12, 1), date(2021, 1, 31)
-    ) == [
+    assert stock_history_year_chunks(date(2020, 12, 1), date(2021, 1, 31)) == [
         (date(2020, 12, 1), date(2020, 12, 31)),
         (date(2021, 1, 1), date(2021, 1, 31)),
     ]
@@ -403,9 +397,7 @@ def test_parse_fund_tracking_and_target_etf() -> None:
             "Datas": {
                 "ETFCODE": "159326",
                 "ETFSHORTNAME": "电网设备ETF华夏",
-                "fundStocks": [
-                    {"GPDM": "600089", "GPJC": "特变电工", "JZBL": "0.25"}
-                ],
+                "fundStocks": [{"GPDM": "600089", "GPJC": "特变电工", "JZBL": "0.25"}],
             },
             "ErrCode": 0,
             "Expansion": "2026-06-30",
@@ -489,6 +481,230 @@ def test_parse_csi_index_top_holdings() -> None:
     assert rows[0].report_date == date(2026, 7, 20)
 
 
+def test_parse_and_merge_csi_index_valuation_points() -> None:
+    pe_points = parse_csi_index_pe_ttm_history(
+        {
+            "code": "200",
+            "data": [
+                {
+                    "tradeDate": "20260723",
+                    "indexName": "CSI 300",
+                    "indexNameEn": "CSI 300",
+                    "peg": 14.59,
+                },
+                {
+                    "tradeDate": "20260724",
+                    "indexName": "CSI 300",
+                    "indexNameEn": "CSI 300",
+                    "peg": 14.39,
+                },
+            ],
+        },
+        expected_code="000300",
+        expected_names={"CSI 300"},
+    )
+    indicator_points = parse_csi_index_indicator_rows(
+        [
+            [
+                "Date",
+                "Index Code",
+                "Chinese Name",
+                "Index Chinese Name",
+                "English Name",
+                "Index English Name",
+                "P/E1",
+                "P/E2",
+                "D/P1",
+                "D/P2",
+            ],
+            [
+                20260723.0,
+                "000300",
+                "CSI 300",
+                "CSI 300",
+                "CSI 300 Index",
+                "CSI 300",
+                14.92,
+                17.53,
+                2.63,
+                2.22,
+            ],
+            [
+                20260724.0,
+                "000300",
+                "CSI 300",
+                "CSI 300",
+                "CSI 300 Index",
+                "CSI 300",
+                14.72,
+                17.24,
+                2.67,
+                2.26,
+            ],
+        ],
+        expected_code="000300",
+        expected_names={"CSI 300"},
+    )
+
+    points = merge_csi_index_valuation_points(pe_points, indicator_points)
+
+    assert len(points) == 2
+    assert points[-1].date == date(2026, 7, 24)
+    assert points[-1].pe_ttm == 14.39
+    assert points[-1].pe_static_total_capital == 14.72
+    assert points[-1].dividend_yield_total_capital_pct == 2.67
+    assert points[-1].pb is None
+    assert points[-1].scoring_eligible is False
+
+
+def test_parse_csi_index_pe_history_rejects_name_mismatch() -> None:
+    with pytest.raises(EastmoneyError, match="name mismatch"):
+        parse_csi_index_pe_ttm_history(
+            {
+                "code": "200",
+                "data": [
+                    {
+                        "tradeDate": "20260724",
+                        "indexName": "CSI 500",
+                        "peg": 26.82,
+                    }
+                ],
+            },
+            expected_code="000300",
+            expected_names={"CSI 300"},
+        )
+
+
+def test_parse_csi_index_weights_requires_complete_weight_sum() -> None:
+    header = [
+        "Date",
+        "Index Code",
+        "Index Name",
+        "Index Name(Eng)",
+        "Constituent Code",
+        "Constituent Name",
+        "Constituent Name(Eng)",
+        "Exchange",
+        "Exchange(Eng)",
+        "weight",
+    ]
+    rows = parse_csi_index_weight_rows(
+        [
+            header,
+            [
+                20260630.0,
+                "931151",
+                "Photovoltaic Industry",
+                "Photovoltaic Industry",
+                "000591",
+                "Solar Energy",
+                "Solar Energy",
+                "SZSE",
+                "SZSE",
+                40.0,
+            ],
+            [
+                20260630.0,
+                "931151",
+                "Photovoltaic Industry",
+                "Photovoltaic Industry",
+                "688599",
+                "Trina Solar",
+                "Trina Solar",
+                "SSE",
+                "SSE",
+                60.0,
+            ],
+        ],
+        expected_code="931151",
+        expected_names={"Photovoltaic Industry"},
+    )
+
+    assert len(rows) == 2
+    assert rows[0].report_date == date(2026, 6, 30)
+    assert sum(item.weight_pct for item in rows) == 100.0
+    assert rows[0].scoring_eligible is False
+
+    with pytest.raises(EastmoneyError, match="sum to"):
+        parse_csi_index_weight_rows(
+            [
+                header,
+                [
+                    20260630.0,
+                    "931151",
+                    "Photovoltaic Industry",
+                    "",
+                    "000591",
+                    "Solar Energy",
+                    "",
+                    "SZSE",
+                    "",
+                    10.0,
+                ],
+            ],
+            expected_code="931151",
+            expected_names={"Photovoltaic Industry"},
+        )
+
+
+def test_csi_index_material_url_is_identity_checked(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    monkeypatch.setattr(
+        client,
+        "_get_validated_json",
+        lambda url, ttl_seconds, is_success: {
+            "code": "200",
+            "data": {
+                "\u6307\u6570\u4f30\u503c": [
+                    {
+                        "fileName": "000300indicator",
+                        "filePath": (
+                            "https://oss-ch.csindex.com.cn/static/html/csindex/public/"
+                            "uploads/file/autofile/indicator/000300indicator.xls"
+                        ),
+                        "fileType": "xls",
+                    }
+                ]
+            },
+        },
+    )
+
+    url = client._get_csi_index_material_url(
+        "000300",
+        category="\u6307\u6570\u4f30\u503c",
+        suffix="indicator",
+    )
+
+    assert url.endswith("/000300indicator.xls")
+
+
+def test_csi_index_material_url_rejects_untrusted_host(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    monkeypatch.setattr(
+        client,
+        "_get_validated_json",
+        lambda url, ttl_seconds, is_success: {
+            "code": "200",
+            "data": {
+                "\u6307\u6570\u4f30\u503c": [
+                    {
+                        "fileName": "000300indicator",
+                        "filePath": "https://example.test/000300indicator.xls",
+                        "fileType": "xls",
+                    }
+                ]
+            },
+        },
+    )
+
+    with pytest.raises(EastmoneyError, match="Unexpected CSI index material URL"):
+        client._get_csi_index_material_url(
+            "000300",
+            category="\u6307\u6570\u4f30\u503c",
+            suffix="indicator",
+        )
+
+
 def test_fund_holdings_route_prefers_official_tracked_index(monkeypatch) -> None:
     client = EastmoneyClient.__new__(EastmoneyClient)
     tracking = FundTrackingInfo(
@@ -500,9 +716,7 @@ def test_fund_holdings_route_prefers_official_tracked_index(monkeypatch) -> None
         target_etf_code="159326",
         target_etf_name="电网设备ETF华夏",
     )
-    official = [
-        FundHolding(1, "600487", "亨通光电", 10.47, None, None, date(2026, 7, 20))
-    ]
+    official = [FundHolding(1, "600487", "亨通光电", 10.47, None, None, date(2026, 7, 20))]
     monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
     monkeypatch.setattr(client, "get_csi_index_top_holdings", lambda code, top_n: official)
 
@@ -529,9 +743,7 @@ def test_fund_holdings_route_falls_back_to_target_etf(monkeypatch) -> None:
         target_etf_code="159326",
         target_etf_name="电网设备ETF华夏",
     )
-    target_etf = [
-        FundHolding(1, "600487", "亨通光电", 15.01, None, None, date(2026, 6, 30))
-    ]
+    target_etf = [FundHolding(1, "600487", "亨通光电", 15.01, None, None, date(2026, 6, 30))]
     monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
 
     def fail_official_index(code: str, top_n: int = 10):
@@ -562,9 +774,7 @@ def test_fund_holdings_route_uses_direct_holdings_for_active_fund(monkeypatch) -
         target_etf_code=None,
         target_etf_name=None,
     )
-    direct = [
-        FundHolding(1, "600519", "贵州茅台", 8.5, None, None, date(2026, 6, 30))
-    ]
+    direct = [FundHolding(1, "600519", "贵州茅台", 8.5, None, None, date(2026, 6, 30))]
     monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
     monkeypatch.setattr(client, "get_fund_holdings", lambda code, top_n=10: direct)
 
@@ -718,11 +928,7 @@ def test_get_fund_nav_prefers_validated_single_request_overview(monkeypatch) -> 
 
 
 def test_parse_pingzhongdata_fund_nav_rejects_route_mismatch() -> None:
-    text = (
-        'var fS_code = "000001";'
-        "var Data_netWorthTrend = [];"
-        "var Data_ACWorthTrend = [];"
-    )
+    text = 'var fS_code = "000001";var Data_netWorthTrend = [];var Data_ACWorthTrend = [];'
 
     with pytest.raises(EastmoneyError, match="code mismatch"):
         parse_pingzhongdata_fund_nav(

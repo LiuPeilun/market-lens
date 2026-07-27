@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import time
@@ -14,6 +16,7 @@ from typing import Any
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
+import xlrd
 
 from market_lens.config import settings
 from market_lens.storage.sqlite_cache import SQLiteCache
@@ -24,6 +27,8 @@ from market_lens.types import (
     CommodityHistoryPeriod,
     CommodityMainContractKey,
     CommodityMainContractSpec,
+    CsiIndexConstituentWeight,
+    CsiIndexValuationPoint,
     FundHolding,
     FundHoldingsRoute,
     FundNavPoint,
@@ -328,9 +333,7 @@ class EastmoneyClient:
             "beg": compact_date(start),
             "end": compact_date(end),
         }
-        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(
-            params
-        )
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(params)
         payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
         rows = validated_commodity_kline_rows(payload, spec, period=period)
         return [row for row in rows if start <= row.date <= end]
@@ -397,9 +400,7 @@ class EastmoneyClient:
 
         rows = [parse_stock_valuation_row(row) for row in raw_rows]
         mismatched_rows = [
-            row
-            for row in rows
-            if row.board_code != normalized_board_code or row.date != trade_date
+            row for row in rows if row.board_code != normalized_board_code or row.date != trade_date
         ]
         if mismatched_rows:
             raise EastmoneyError(
@@ -427,7 +428,7 @@ class EastmoneyClient:
         page_size: int,
     ) -> dict[str, Any]:
         filter_value = quote(
-            f'(BOARD_CODE="{board_code}")(TRADE_DATE=\'{trade_date.isoformat()}\')',
+            f"(BOARD_CODE=\"{board_code}\")(TRADE_DATE='{trade_date.isoformat()}')",
             safe="()='",
         )
         params = {
@@ -455,9 +456,8 @@ class EastmoneyClient:
 
     def get_stock_profile(self, symbol: str) -> StockProfile | None:
         code = f10_stock_code(symbol)
-        url = (
-            "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax?"
-            + urlencode({"code": code})
+        url = "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax?" + urlencode(
+            {"code": code}
         )
         payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
         rows = payload.get("jbzl") or []
@@ -722,9 +722,7 @@ class EastmoneyClient:
             "beg": compact_date(start),
             "end": compact_date(end),
         }
-        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(
-            params
-        )
+        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(params)
         payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
         rows = validated_reit_kline_rows(payload, profile, period=period)
         return [row for row in rows if start <= row.date <= end]
@@ -745,13 +743,9 @@ class EastmoneyClient:
             "showtype": "0",
             "year": "",
         }
-        base_url = "https://api.fund.eastmoney.com/f10/GetArrayCwzb?" + urlencode(
-            base_params
-        )
+        base_url = "https://api.fund.eastmoney.com/f10/GetArrayCwzb?" + urlencode(base_params)
         first_payload = self._get_json(base_url, ttl_seconds=24 * 60 * 60)
-        first_rows, years, response_year = validated_reit_financial_payload(
-            first_payload
-        )
+        first_rows, years, response_year = validated_reit_financial_payload(first_payload)
 
         raw_rows = list(first_rows)
         for year in years:
@@ -760,13 +754,9 @@ class EastmoneyClient:
             params = base_params | {"year": str(year)}
             url = "https://api.fund.eastmoney.com/f10/GetArrayCwzb?" + urlencode(params)
             payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
-            rows, returned_years, returned_year = validated_reit_financial_payload(
-                payload
-            )
+            rows, returned_years, returned_year = validated_reit_financial_payload(payload)
             if returned_year != year or returned_years != years:
-                raise EastmoneyError(
-                    f"Eastmoney REIT financial year route mismatch for {year}"
-                )
+                raise EastmoneyError(f"Eastmoney REIT financial year route mismatch for {year}")
             raw_rows.extend(rows)
 
         notices = [
@@ -858,9 +848,7 @@ class EastmoneyClient:
         index_code: str,
         top_n: int = 10,
     ) -> list[FundHolding]:
-        normalized_code = str(index_code).strip().upper()
-        if not re.fullmatch(r"[A-Z0-9.]+", normalized_code):
-            raise ValueError(f"Invalid CSI index code: {index_code!r}")
+        normalized_code = normalize_csi_index_code(index_code)
         url = (
             "https://www.csindex.com.cn/csindex-home/index/weight/top10new/"
             f"{quote(normalized_code)}"
@@ -871,6 +859,136 @@ class EastmoneyClient:
             is_success=lambda value: str(value.get("code")) == "200",
         )
         return parse_csi_index_top_holdings(payload)[:top_n]
+
+    def get_csi_index_valuation_history(
+        self,
+        index_code: str,
+    ) -> list[CsiIndexValuationPoint]:
+        normalized_code = normalize_csi_index_code(index_code)
+        basic_info = self._get_csi_index_basic_info(normalized_code)
+        expected_names = {
+            str(basic_info.get("indexShortNameCn") or "").strip(),
+            str(basic_info.get("indexShortNameEn") or "").strip(),
+        }
+        expected_names.discard("")
+
+        history_url = "https://www.csindex.com.cn/csindex-home/perf/indexCsiDsPe?" + urlencode(
+            {"indexCode": normalized_code}
+        )
+        history_payload = self._get_validated_json(
+            history_url,
+            ttl_seconds=24 * 60 * 60,
+            is_success=lambda value: str(value.get("code")) == "200",
+        )
+        pe_ttm_points = parse_csi_index_pe_ttm_history(
+            history_payload,
+            expected_code=normalized_code,
+            expected_names=expected_names,
+        )
+
+        indicator_url = self._get_csi_index_material_url(
+            normalized_code,
+            category="\u6307\u6570\u4f30\u503c",
+            suffix="indicator",
+        )
+        indicator_points = parse_csi_index_indicator_workbook(
+            self._get_bytes(indicator_url, ttl_seconds=24 * 60 * 60),
+            expected_code=normalized_code,
+            expected_names=expected_names,
+        )
+        return merge_csi_index_valuation_points(pe_ttm_points, indicator_points)
+
+    def get_csi_index_full_weights(
+        self,
+        index_code: str,
+    ) -> list[CsiIndexConstituentWeight]:
+        normalized_code = normalize_csi_index_code(index_code)
+        basic_info = self._get_csi_index_basic_info(normalized_code)
+        expected_names = {
+            str(basic_info.get("indexShortNameCn") or "").strip(),
+            str(basic_info.get("indexShortNameEn") or "").strip(),
+        }
+        expected_names.discard("")
+        weights_url = self._get_csi_index_material_url(
+            normalized_code,
+            category="\u6837\u672c\u6743\u91cd",
+            suffix="closeweight",
+        )
+        return parse_csi_index_weights_workbook(
+            self._get_bytes(weights_url, ttl_seconds=24 * 60 * 60),
+            expected_code=normalized_code,
+            expected_names=expected_names,
+        )
+
+    def _get_csi_index_basic_info(self, normalized_code: str) -> dict[str, Any]:
+        url = (
+            "https://www.csindex.com.cn/csindex-home/indexInfo/index-basic-info/"
+            f"{quote(normalized_code)}"
+        )
+        payload = self._get_validated_json(
+            url,
+            ttl_seconds=24 * 60 * 60,
+            is_success=lambda value: (
+                str(value.get("code")) == "200" and isinstance(value.get("data"), dict)
+            ),
+        )
+        data = payload.get("data")
+        if not isinstance(data, dict) or str(data.get("indexCode") or "") != normalized_code:
+            raise EastmoneyError(f"CSI index basic information mismatch for {normalized_code}")
+        if not data.get("indexShortNameCn") and not data.get("indexShortNameEn"):
+            raise EastmoneyError(f"CSI index basic information has no name for {normalized_code}")
+        return data
+
+    def _get_csi_index_material_url(
+        self,
+        normalized_code: str,
+        *,
+        category: str,
+        suffix: str,
+    ) -> str:
+        params = {"fileLang": "2", "indexCode": normalized_code}
+        url = "https://www.csindex.com.cn/csindex-home/indexInfo/index-details-data?" + urlencode(
+            params
+        )
+        payload = self._get_validated_json(
+            url,
+            ttl_seconds=24 * 60 * 60,
+            is_success=lambda value: (
+                str(value.get("code")) == "200" and isinstance(value.get("data"), dict)
+            ),
+        )
+        data = payload.get("data")
+        entries = data.get(category) if isinstance(data, dict) else None
+        expected_name = f"{normalized_code}{suffix}"
+        if not isinstance(entries, list):
+            raise EastmoneyError(
+                f"CSI index material '{suffix}' is unavailable for {normalized_code}"
+            )
+        matches = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict)
+            and str(entry.get("fileName") or "") == expected_name
+            and str(entry.get("fileType") or "").lower() == "xls"
+        ]
+        if len(matches) != 1:
+            raise EastmoneyError(
+                f"CSI index material '{suffix}' is ambiguous for {normalized_code}"
+            )
+        material_url = str(matches[0].get("filePath") or "")
+        parsed = urlparse(material_url)
+        expected_file = f"/{expected_name}.xls"
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "oss-ch.csindex.com.cn"
+            or not parsed.path.endswith(expected_file)
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise EastmoneyError(
+                f"Unexpected CSI index material URL for {normalized_code}: {material_url}"
+            )
+        return material_url
 
     def get_fund_holdings_route(
         self,
@@ -1073,15 +1191,10 @@ class EastmoneyClient:
         }
         url = (
             "https://quotes.sina.cn/cn/api/jsonp.php/var%20_data=/"
-            "CN_MarketDataService.getKLineData?"
-            + urlencode(params)
+            "CN_MarketDataService.getKLineData?" + urlencode(params)
         )
         text = self._get_text(url, ttl_seconds=12 * 60 * 60)
-        return [
-            item
-            for item in parse_sina_index_history(text)
-            if start <= item.date <= end
-        ]
+        return [item for item in parse_sina_index_history(text) if start <= item.date <= end]
 
     def get_tencent_stock_history(
         self,
@@ -1105,17 +1218,14 @@ class EastmoneyClient:
                     "qfq",
                 )
             )
-            url = (
-                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?"
-                + urlencode({"param": request}, safe=",")
+            url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?" + urlencode(
+                {"param": request}, safe=","
             )
             payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
             for bar in parse_tencent_qfq_history(payload, market_symbol):
                 if chunk_start <= bar.date <= chunk_end:
                     bars_by_date[bar.date] = bar
-        return with_stock_bar_changes(
-            [bars_by_date[item] for item in sorted(bars_by_date)]
-        )
+        return with_stock_bar_changes([bars_by_date[item] for item in sorted(bars_by_date)])
 
     def search_assets(
         self,
@@ -1273,6 +1383,57 @@ class EastmoneyClient:
             f"{last_error}"
         ) from last_error
 
+    def _get_bytes(self, url: str, ttl_seconds: int) -> bytes:
+        cache_key = f"binary:{url}"
+        cached = self.cache.get(cache_key, ttl_seconds=ttl_seconds)
+        if cached is not None:
+            try:
+                content = base64.b64decode(cached, validate=True)
+            except (binascii.Error, ValueError):
+                self.cache.delete(cache_key)
+            else:
+                if content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+                    return content
+                self.cache.delete(cache_key)
+
+        last_error: Exception | None = None
+        max_attempts = self.retries + 1
+        for attempt in range(max_attempts):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout,
+                    headers=self._headers_for_url(url),
+                    follow_redirects=True,
+                    http2=False,
+                    trust_env=False,
+                ) as client:
+                    response = client.get(url)
+                    response.raise_for_status()
+                    content = response.content
+                    if not content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+                        raise EastmoneyError(
+                            f"Unexpected binary workbook response from {urlparse(url).netloc}"
+                        )
+                    self.cache.set(cache_key, base64.b64encode(content).decode("ascii"))
+                    return content
+            except (
+                EastmoneyError,
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadError,
+                httpx.ReadTimeout,
+                httpx.RemoteProtocolError,
+                httpx.HTTPStatusError,
+            ) as exc:
+                last_error = exc
+                if attempt < max_attempts - 1:
+                    time.sleep(0.4 * (2**attempt))
+        host = urlparse(url).netloc
+        raise EastmoneyError(
+            f"Failed to fetch binary market data from {host} after {max_attempts} attempts: "
+            f"{last_error}"
+        ) from last_error
+
     def _headers_for_url(self, url: str) -> dict[str, str]:
         headers = dict(self.headers)
         host = urlparse(url).netloc
@@ -1291,6 +1452,9 @@ class EastmoneyClient:
             headers["User-Agent"] = "Mozilla/5.0"
         elif host == "www.csindex.com.cn":
             headers["Accept"] = "application/json,text/plain,*/*"
+            headers["Referer"] = "https://www.csindex.com.cn/"
+        elif host == "oss-ch.csindex.com.cn":
+            headers["Accept"] = "application/vnd.ms-excel,application/octet-stream,*/*;q=0.8"
             headers["Referer"] = "https://www.csindex.com.cn/"
         elif host == "datacenter-web.eastmoney.com":
             headers["Referer"] = "https://data.eastmoney.com/"
@@ -1350,6 +1514,13 @@ def normalize_fund_code(code: str) -> str:
     if len(digits) != 6:
         raise ValueError(f"Expected a 6-digit fund code, got {code!r}")
     return digits
+
+
+def normalize_csi_index_code(code: str) -> str:
+    normalized = str(code).strip().upper()
+    if not re.fullmatch(r"[A-Z0-9.]+", normalized):
+        raise ValueError(f"Invalid CSI index code: {code!r}")
+    return normalized
 
 
 def fund_mobile_params(code: str) -> dict[str, str]:
@@ -1761,9 +1932,7 @@ def validated_reit_financial_payload(
     for field_name in REIT_FINANCIAL_FIELDS:
         values = data.get(field_name)
         if not isinstance(values, list):
-            raise EastmoneyError(
-                f"Eastmoney REIT financial field {field_name} is not an array"
-            )
+            raise EastmoneyError(f"Eastmoney REIT financial field {field_name} is not an array")
         arrays[field_name] = values
     row_count = len(arrays["FSRQ"])
     if any(len(values) != row_count for values in arrays.values()):
@@ -1808,9 +1977,7 @@ def deduplicate_reit_financial_rows(
             raise EastmoneyError("Eastmoney REIT financial row has no valid report date")
         existing = by_date.get(report_date)
         if existing is not None:
-            if normalized_reit_financial_values(existing) != normalized_reit_financial_values(
-                row
-            ):
+            if normalized_reit_financial_values(existing) != normalized_reit_financial_values(row):
                 raise EastmoneyError(
                     f"Conflicting Eastmoney REIT financial values for {report_date}"
                 )
@@ -1883,9 +2050,7 @@ def select_reit_financial_notice(
     }
     kinds = preferred_kinds.get((report_date.month, report_date.day), ())
     candidates = [
-        notice
-        for notice in notices
-        if notice.is_canonical and notice.report_date == report_date
+        notice for notice in notices if notice.is_canonical and notice.report_date == report_date
     ]
     for kind in kinds:
         matching = [notice for notice in candidates if notice.report_kind == kind]
@@ -1977,9 +2142,7 @@ def deduplicate_reit_announcement_rows(
             raise EastmoneyError("Eastmoney REIT announcement has no ID")
         existing = by_id.get(announcement_id)
         if existing is not None and existing != row:
-            raise EastmoneyError(
-                f"Conflicting Eastmoney REIT announcement {announcement_id}"
-            )
+            raise EastmoneyError(f"Conflicting Eastmoney REIT announcement {announcement_id}")
         by_id[announcement_id] = row
     return list(by_id.values())
 
@@ -2083,9 +2246,7 @@ def parse_stock_balance_sheet(row: dict[str, Any]) -> StockBalanceSheet:
         accounts_payable_cny=to_float(row.get("ACCOUNTS_PAYABLE")),
         contract_liability_cny=to_float(row.get("CONTRACT_LIAB")),
         short_term_borrowings_cny=to_float(row.get("SHORT_LOAN")),
-        current_portion_noncurrent_liabilities_cny=to_float(
-            row.get("NONCURRENT_LIAB_1YEAR")
-        ),
+        current_portion_noncurrent_liabilities_cny=to_float(row.get("NONCURRENT_LIAB_1YEAR")),
         long_term_borrowings_cny=to_float(row.get("LONG_LOAN")),
         bonds_payable_cny=to_float(row.get("BOND_PAYABLE")),
         total_equity_cny=to_float(row.get("TOTAL_EQUITY")),
@@ -2434,11 +2595,7 @@ def parse_pingzhongdata_fund_nav(
         raise EastmoneyError("Eastmoney fund NAV overview contains no usable rows")
     points = [points_by_date[key] for key in sorted(points_by_date)]
     first_movement = next(
-        (
-            index
-            for index, point in enumerate(points)
-            if point.daily_growth_pct not in {None, 0.0}
-        ),
+        (index for index, point in enumerate(points) if point.daily_growth_pct not in {None, 0.0}),
         len(points),
     )
     normalized_points = [
@@ -2589,6 +2746,360 @@ def parse_csi_index_top_holdings(payload: dict[str, Any]) -> list[FundHolding]:
     return sorted(holdings, key=lambda item: item.rank)
 
 
+def parse_csi_index_pe_ttm_history(
+    payload: dict[str, Any],
+    *,
+    expected_code: str,
+    expected_names: set[str],
+) -> list[CsiIndexValuationPoint]:
+    if str(payload.get("code")) != "200" or not isinstance(payload.get("data"), list):
+        message = payload.get("msg") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve CSI index PE history: {message}")
+    raw_rows = payload["data"]
+    if not raw_rows:
+        raise EastmoneyError(f"CSI index PE history is empty for {expected_code}")
+
+    points_by_date: dict[date, CsiIndexValuationPoint] = {}
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            raise EastmoneyError(f"Invalid CSI index PE history row for {expected_code}")
+        point_date = parse_csi_compact_date(row.get("tradeDate"))
+        name = str(row.get("indexName") or row.get("indexNameEn") or "").strip()
+        if not name or (expected_names and name not in expected_names):
+            raise EastmoneyError(
+                f"CSI index PE history name mismatch for {expected_code}: {name!r}"
+            )
+        pe_ttm = to_float(row.get("peg"))
+        if pe_ttm is not None and (not isfinite(pe_ttm) or pe_ttm <= 0):
+            raise EastmoneyError(
+                f"Invalid CSI index rolling PE for {expected_code} on {point_date}"
+            )
+        point = CsiIndexValuationPoint(
+            date=point_date,
+            index_code=expected_code,
+            index_name=name,
+            pe_ttm=pe_ttm,
+            pe_static_total_capital=None,
+            pe_static_calculation_capital=None,
+            pb=None,
+            dividend_yield_total_capital_pct=None,
+            dividend_yield_calculation_capital_pct=None,
+            source="csindex_official_pe_ttm_history",
+            raw=dict(row),
+        )
+        existing = points_by_date.get(point_date)
+        if existing is not None and existing != point:
+            raise EastmoneyError(
+                f"Conflicting CSI index PE history rows for {expected_code} on {point_date}"
+            )
+        points_by_date[point_date] = point
+    return [points_by_date[key] for key in sorted(points_by_date)]
+
+
+def parse_csi_index_indicator_workbook(
+    content: bytes,
+    *,
+    expected_code: str,
+    expected_names: set[str],
+) -> list[CsiIndexValuationPoint]:
+    return parse_csi_index_indicator_rows(
+        read_csi_xls_rows(content),
+        expected_code=expected_code,
+        expected_names=expected_names,
+    )
+
+
+def parse_csi_index_indicator_rows(
+    rows: list[list[Any]],
+    *,
+    expected_code: str,
+    expected_names: set[str],
+) -> list[CsiIndexValuationPoint]:
+    if not rows:
+        raise EastmoneyError(f"CSI index indicator workbook is empty for {expected_code}")
+    require_csi_xls_header(
+        rows[0],
+        {
+            0: "Date",
+            1: "Index Code",
+            6: "P/E1",
+            7: "P/E2",
+            8: "D/P1",
+            9: "D/P2",
+        },
+        expected_code=expected_code,
+    )
+
+    points_by_date: dict[date, CsiIndexValuationPoint] = {}
+    for raw_row in rows[1:]:
+        if not any(str(value).strip() for value in raw_row):
+            continue
+        if len(raw_row) < 10:
+            raise EastmoneyError(f"Invalid CSI index indicator row for {expected_code}")
+        point_date = parse_csi_compact_date(raw_row[0])
+        index_code = normalize_csi_xls_code(raw_row[1])
+        if index_code != expected_code:
+            raise EastmoneyError(
+                f"CSI index indicator code mismatch: expected {expected_code}, got {index_code}"
+            )
+        name = str(raw_row[3] or raw_row[2] or "").strip()
+        if not name or (expected_names and name not in expected_names):
+            raise EastmoneyError(f"CSI index indicator name mismatch for {expected_code}: {name!r}")
+        values = [to_float(raw_row[index]) for index in range(6, 10)]
+        if not any(value is not None for value in values):
+            raise EastmoneyError(
+                f"CSI index indicator has no valuation values for {expected_code} on {point_date}"
+            )
+        pe_values = values[:2]
+        dividend_values = values[2:]
+        if any(
+            value is not None and (not isfinite(value) or value <= 0) for value in pe_values
+        ) or any(
+            value is not None and (not isfinite(value) or value < 0) for value in dividend_values
+        ):
+            raise EastmoneyError(
+                f"Invalid CSI index indicator value for {expected_code} on {point_date}"
+            )
+        point = CsiIndexValuationPoint(
+            date=point_date,
+            index_code=index_code,
+            index_name=name,
+            pe_ttm=None,
+            pe_static_total_capital=values[0],
+            pe_static_calculation_capital=values[1],
+            pb=None,
+            dividend_yield_total_capital_pct=values[2],
+            dividend_yield_calculation_capital_pct=values[3],
+            source="csindex_official_indicator",
+            raw={
+                "date": raw_row[0],
+                "index_code": raw_row[1],
+                "pe_1": raw_row[6],
+                "pe_2": raw_row[7],
+                "dp_1": raw_row[8],
+                "dp_2": raw_row[9],
+            },
+        )
+        existing = points_by_date.get(point_date)
+        if existing is not None and existing != point:
+            raise EastmoneyError(
+                f"Conflicting CSI index indicator rows for {expected_code} on {point_date}"
+            )
+        points_by_date[point_date] = point
+    if not points_by_date:
+        raise EastmoneyError(f"CSI index indicator workbook has no rows for {expected_code}")
+    return [points_by_date[key] for key in sorted(points_by_date)]
+
+
+def merge_csi_index_valuation_points(
+    pe_ttm_points: list[CsiIndexValuationPoint],
+    indicator_points: list[CsiIndexValuationPoint],
+) -> list[CsiIndexValuationPoint]:
+    if not pe_ttm_points or not indicator_points:
+        raise EastmoneyError("CSI index valuation requires both PE history and indicators")
+    if pe_ttm_points[-1].date != indicator_points[-1].date:
+        raise EastmoneyError(
+            "CSI index PE history and indicator workbook have different latest dates"
+        )
+
+    pe_by_date = {point.date: point for point in pe_ttm_points}
+    indicator_by_date = {point.date: point for point in indicator_points}
+    dates = sorted(pe_by_date.keys() | indicator_by_date.keys())
+    merged: list[CsiIndexValuationPoint] = []
+    for point_date in dates:
+        pe_point = pe_by_date.get(point_date)
+        indicator = indicator_by_date.get(point_date)
+        reference = indicator or pe_point
+        if reference is None:
+            continue
+        if (
+            pe_point is not None
+            and indicator is not None
+            and (
+                pe_point.index_code != indicator.index_code
+                or pe_point.index_name != indicator.index_name
+            )
+        ):
+            raise EastmoneyError(f"CSI index valuation identity mismatch on {point_date}")
+        merged.append(
+            CsiIndexValuationPoint(
+                date=point_date,
+                index_code=reference.index_code,
+                index_name=reference.index_name,
+                pe_ttm=pe_point.pe_ttm if pe_point else None,
+                pe_static_total_capital=(indicator.pe_static_total_capital if indicator else None),
+                pe_static_calculation_capital=(
+                    indicator.pe_static_calculation_capital if indicator else None
+                ),
+                pb=None,
+                dividend_yield_total_capital_pct=(
+                    indicator.dividend_yield_total_capital_pct if indicator else None
+                ),
+                dividend_yield_calculation_capital_pct=(
+                    indicator.dividend_yield_calculation_capital_pct if indicator else None
+                ),
+                source="csindex_official_valuation",
+                raw={
+                    "pe_ttm": pe_point.raw if pe_point else None,
+                    "indicator": indicator.raw if indicator else None,
+                },
+            )
+        )
+    return merged
+
+
+def parse_csi_index_weights_workbook(
+    content: bytes,
+    *,
+    expected_code: str,
+    expected_names: set[str],
+) -> list[CsiIndexConstituentWeight]:
+    return parse_csi_index_weight_rows(
+        read_csi_xls_rows(content),
+        expected_code=expected_code,
+        expected_names=expected_names,
+    )
+
+
+def parse_csi_index_weight_rows(
+    rows: list[list[Any]],
+    *,
+    expected_code: str,
+    expected_names: set[str],
+) -> list[CsiIndexConstituentWeight]:
+    if not rows:
+        raise EastmoneyError(f"CSI index weight workbook is empty for {expected_code}")
+    require_csi_xls_header(
+        rows[0],
+        {
+            0: "Date",
+            1: "Index Code",
+            4: "Constituent Code",
+            7: "Exchange",
+            9: "weight",
+        },
+        expected_code=expected_code,
+    )
+
+    weights: list[CsiIndexConstituentWeight] = []
+    identities: set[tuple[str, str]] = set()
+    report_dates: set[date] = set()
+    for raw_row in rows[1:]:
+        if not any(str(value).strip() for value in raw_row):
+            continue
+        if len(raw_row) < 10:
+            raise EastmoneyError(f"Invalid CSI index weight row for {expected_code}")
+        report_date = parse_csi_compact_date(raw_row[0])
+        index_code = normalize_csi_xls_code(raw_row[1])
+        if index_code != expected_code:
+            raise EastmoneyError(
+                f"CSI index weight code mismatch: expected {expected_code}, got {index_code}"
+            )
+        index_name = str(raw_row[2] or raw_row[3] or "").strip()
+        if not index_name or (expected_names and index_name not in expected_names):
+            raise EastmoneyError(
+                f"CSI index weight name mismatch for {expected_code}: {index_name!r}"
+            )
+        security_code = normalize_csi_security_code(raw_row[4])
+        security_name = str(raw_row[5] or raw_row[6] or "").strip()
+        exchange = str(raw_row[7] or raw_row[8] or "").strip()
+        weight_pct = to_float(raw_row[9])
+        if (
+            not security_code
+            or not security_name
+            or not exchange
+            or weight_pct is None
+            or not isfinite(weight_pct)
+            or weight_pct <= 0
+        ):
+            raise EastmoneyError(f"Invalid CSI index constituent weight for {expected_code}")
+        identity = (exchange, security_code)
+        if identity in identities:
+            raise EastmoneyError(
+                f"Duplicate CSI index constituent {security_code} for {expected_code}"
+            )
+        identities.add(identity)
+        report_dates.add(report_date)
+        weights.append(
+            CsiIndexConstituentWeight(
+                rank=len(weights) + 1,
+                report_date=report_date,
+                index_code=index_code,
+                index_name=index_name,
+                security_code=security_code,
+                security_name=security_name,
+                exchange=exchange,
+                weight_pct=weight_pct,
+            )
+        )
+    if not weights or len(report_dates) != 1:
+        raise EastmoneyError(
+            f"CSI index weight workbook has invalid report dates for {expected_code}"
+        )
+    total_weight = sum(item.weight_pct for item in weights)
+    if not 98.0 <= total_weight <= 102.0:
+        raise EastmoneyError(f"CSI index weights sum to {total_weight:.3f}% for {expected_code}")
+    return weights
+
+
+def read_csi_xls_rows(content: bytes) -> list[list[Any]]:
+    if not content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        raise EastmoneyError("CSI index workbook is not an OLE2 XLS file")
+    try:
+        workbook = xlrd.open_workbook(file_contents=content, on_demand=True)
+        if workbook.nsheets != 1:
+            raise EastmoneyError(f"Unexpected CSI index workbook sheet count: {workbook.nsheets}")
+        sheet = workbook.sheet_by_index(0)
+        rows = [sheet.row_values(index) for index in range(sheet.nrows)]
+    except xlrd.XLRDError as exc:
+        raise EastmoneyError("Failed to parse CSI index XLS workbook") from exc
+    finally:
+        if "workbook" in locals():
+            workbook.release_resources()
+    return rows
+
+
+def require_csi_xls_header(
+    row: list[Any],
+    expected: dict[int, str],
+    *,
+    expected_code: str,
+) -> None:
+    for index, token in expected.items():
+        value = str(row[index] if index < len(row) else "")
+        if token.casefold() not in value.casefold():
+            raise EastmoneyError(
+                f"Unexpected CSI index workbook schema for {expected_code}: "
+                f"column {index} does not contain {token!r}"
+            )
+
+
+def parse_csi_compact_date(value: Any) -> date:
+    if isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    else:
+        text = str(value or "").strip()
+    if not re.fullmatch(r"\d{8}", text):
+        raise EastmoneyError(f"Invalid CSI index date: {value!r}")
+    try:
+        return datetime.strptime(text, "%Y%m%d").date()
+    except ValueError as exc:
+        raise EastmoneyError(f"Invalid CSI index date: {value!r}") from exc
+
+
+def normalize_csi_xls_code(value: Any) -> str:
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value)).zfill(6)
+    return str(value or "").strip().upper()
+
+
+def normalize_csi_security_code(value: Any) -> str:
+    code = normalize_csi_xls_code(value)
+    if not re.fullmatch(r"[A-Z0-9.]+", code):
+        raise EastmoneyError(f"Invalid CSI constituent code: {value!r}")
+    return code
+
+
 def build_fund_holdings_route(
     holdings: list[FundHolding],
     source: str,
@@ -2621,16 +3132,14 @@ def parse_fund_archives_content(text: str) -> str:
     try:
         content = json.loads(f'"{content}"')
     except json.JSONDecodeError:
-        content = content.replace(r'\"', '"').replace(r"\/", "/")
+        content = content.replace(r"\"", '"').replace(r"\/", "/")
     return unescape(content)
 
 
 def parse_fund_holdings_table(content: str) -> list[FundHolding]:
     parser = FundHoldingsHTMLParser.parse(content)
     report_date_match = re.search(r"截止至：\s*(\d{4}-\d{2}-\d{2})", parser.text)
-    report_date = (
-        parse_optional_date(report_date_match.group(1)) if report_date_match else None
-    )
+    report_date = parse_optional_date(report_date_match.group(1)) if report_date_match else None
     holdings: list[FundHolding] = []
     for cells in parser.rows:
         if len(cells) < 9 or not cells[0].isdigit():
@@ -2710,23 +3219,17 @@ def parse_tencent_qfq_history(
     data = payload.get("data")
     security = data.get(market_symbol) if isinstance(data, dict) else None
     if not isinstance(security, dict):
-        raise EastmoneyError(
-            f"Unexpected Tencent stock history response for {market_symbol}"
-        )
+        raise EastmoneyError(f"Unexpected Tencent stock history response for {market_symbol}")
     raw_rows = security.get("qfqday")
     if raw_rows is None:
         raw_rows = security.get("day")
     if not isinstance(raw_rows, list):
-        raise EastmoneyError(
-            f"Tencent stock history has no qfq daily rows for {market_symbol}"
-        )
+        raise EastmoneyError(f"Tencent stock history has no qfq daily rows for {market_symbol}")
 
     rows: list[StockBar] = []
     for raw_row in raw_rows:
         if not isinstance(raw_row, list) or len(raw_row) < 6:
-            raise EastmoneyError(
-                f"Unexpected Tencent stock history row for {market_symbol}"
-            )
+            raise EastmoneyError(f"Unexpected Tencent stock history row for {market_symbol}")
         try:
             rows.append(
                 StockBar(
@@ -2744,9 +3247,7 @@ def parse_tencent_qfq_history(
                 )
             )
         except (TypeError, ValueError) as exc:
-            raise EastmoneyError(
-                f"Invalid Tencent stock history row for {market_symbol}"
-            ) from exc
+            raise EastmoneyError(f"Invalid Tencent stock history row for {market_symbol}") from exc
     return sorted(rows, key=lambda item: item.date)
 
 
