@@ -433,6 +433,20 @@ class FundHoldingsRoute:
 
 
 @dataclass(frozen=True)
+class FundIndexDataRoute:
+    valuation_points: list[CsiIndexValuationPoint]
+    constituent_weights: list[CsiIndexConstituentWeight]
+    source: str
+    scope: str
+    tracking: FundTrackingInfo | None
+    valuation_as_of: date | None
+    weights_as_of: date | None
+    coverage: float
+    fallback_reasons: tuple[str, ...] = ()
+    scoring_eligible: bool = field(default=False, init=False)
+
+
+@dataclass(frozen=True)
 class FundNavPoint:
     date: date
     unit_nav: float | None

@@ -14,6 +14,7 @@ from market_lens.types import (
     AssetSearchResult,
     FundHolding,
     FundHoldingsRoute,
+    FundIndexDataRoute,
     FundNavPoint,
     ReitDistribution,
     ReitFinancialSnapshot,
@@ -27,6 +28,11 @@ from market_lens.types import (
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.assessment import build_fund_assessment
 from market_lens.valuation.framework import analyze_index_price_proxy
+from market_lens.valuation.index_data import (
+    build_csi_fund_index_data_route,
+    serialize_fund_index_data_route,
+    unavailable_fund_index_data_route,
+)
 from market_lens.valuation.metrics import (
     annualized_return,
     format_pct,
@@ -178,6 +184,10 @@ class MarketAnalysisAgent:
                 holdings = holdings_route.holdings
             except EastmoneyError:
                 holdings = []
+            index_data_route = self._load_fund_index_data_route(
+                holdings_route,
+                analysis_end=end,
+            )
             index_candidate, index_bars, benchmark_source = self._load_tracked_index_history(
                 holdings_route,
                 start=start,
@@ -252,6 +262,16 @@ class MarketAnalysisAgent:
                 result["notes"].insert(
                     0,
                     "ETF valuation currently uses tracked-index price percentile as a proxy.",
+                )
+            index_data_metadata = serialize_fund_index_data_route(index_data_route)
+            result["index_data_route"] = index_data_metadata
+            result["valuation"]["index_data_route"] = index_data_metadata
+            if index_data_route.scope != "unavailable":
+                result["notes"].insert(
+                    0,
+                    "Official CSI index fundamentals and complete monthly constituent weights "
+                    "passed deterministic routing checks; they remain read-only until the "
+                    "index factor model is enabled.",
                 )
             result["assessment"] = build_fund_assessment(
                 result,
@@ -442,6 +462,55 @@ class MarketAnalysisAgent:
                 "This is a research summary, not investment advice.",
             ],
         }
+
+    def _load_fund_index_data_route(
+        self,
+        route: FundHoldingsRoute | None,
+        *,
+        analysis_end: date,
+    ) -> FundIndexDataRoute:
+        tracking = route.tracking if route else None
+        if tracking is None:
+            return unavailable_fund_index_data_route(
+                None,
+                "fund_tracking_relationship_unavailable",
+            )
+        if not tracking.index_code or not tracking.index_name:
+            return unavailable_fund_index_data_route(
+                tracking,
+                "tracked_index_identity_incomplete",
+            )
+
+        try:
+            valuation_points = self.data_client.get_csi_index_valuation_history(
+                tracking.index_code
+            )
+        except (EastmoneyError, ValueError) as exc:
+            return unavailable_fund_index_data_route(
+                tracking,
+                f"official_index_valuation_unavailable: {exc}",
+            )
+        try:
+            constituent_weights = self.data_client.get_csi_index_full_weights(
+                tracking.index_code
+            )
+        except (EastmoneyError, ValueError) as exc:
+            return unavailable_fund_index_data_route(
+                tracking,
+                f"official_index_complete_weights_unavailable: {exc}",
+            )
+        try:
+            return build_csi_fund_index_data_route(
+                tracking,
+                valuation_points,
+                constituent_weights,
+                analysis_end=analysis_end,
+            )
+        except ValueError as exc:
+            return unavailable_fund_index_data_route(
+                tracking,
+                f"official_index_route_rejected: {exc}",
+            )
 
     def _load_tracked_index_history(
         self,
