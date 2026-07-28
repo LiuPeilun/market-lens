@@ -24,6 +24,9 @@ class Settings:
     http_timeout: float = float(os.getenv("MARKET_LENS_HTTP_TIMEOUT", "15"))
     http_retries: int = int(os.getenv("MARKET_LENS_HTTP_RETRIES", "2"))
     db_path: Path = Path(os.getenv("MARKET_LENS_DB_PATH", ".data/market_lens.sqlite3"))
+    lkg_max_age_seconds: int = int(
+        os.getenv("MARKET_LENS_LKG_MAX_AGE_SECONDS", str(7 * 24 * 60 * 60))
+    )
     llm_base_url: str = os.getenv("MARKET_LENS_LLM_BASE_URL", "http://218.106.157.54:13006/v1")
     llm_model: str = os.getenv("MARKET_LENS_LLM_MODEL", "qwen3.5-27b")
     llm_api_key: str | None = os.getenv("MARKET_LENS_LLM_API_KEY") or None
@@ -90,6 +93,8 @@ class Settings:
             raise ValueError(
                 "MARKET_LENS_TOOL_APPROVAL_TTL_SECONDS must be between 30 and 3600"
             )
+        if self.lkg_max_age_seconds < 0:
+            raise ValueError("MARKET_LENS_LKG_MAX_AGE_SECONDS must not be negative")
         if (
             environment not in {"development", "dev", "test"}
             and not self.tool_approval_signing_key_configured

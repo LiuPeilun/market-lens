@@ -32,3 +32,8 @@ def test_production_accepts_configured_approval_signing_key() -> None:
 def test_runtime_rejects_unsafe_approval_ttl(ttl: int) -> None:
     with pytest.raises(ValueError, match="TTL_SECONDS must be between"):
         Settings(tool_approval_ttl_seconds=ttl).validate_runtime()
+
+
+def test_runtime_rejects_negative_lkg_max_age() -> None:
+    with pytest.raises(ValueError, match="LKG_MAX_AGE_SECONDS must not be negative"):
+        Settings(lkg_max_age_seconds=-1).validate_runtime()

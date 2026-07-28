@@ -19,6 +19,29 @@ import httpx
 import xlrd
 
 from market_lens.config import settings
+from market_lens.data.snapshot_validation import (
+    EASTMONEY_DATACENTER_SOURCE,
+    EASTMONEY_F10_NAV_SOURCE,
+    EASTMONEY_PINGZHONGDATA_SOURCE,
+    EASTMONEY_PUSH2HIS_SOURCE,
+    EXCHANGE_FUND_PRICE_DATASET,
+    FUND_NAV_DATASET,
+    FUND_NAV_SNAPSHOT_VERSION,
+    STOCK_HISTORY_DATASET,
+    STOCK_HISTORY_SNAPSHOT_VERSION,
+    STOCK_VALUATION_DATASET,
+    STOCK_VALUATION_SNAPSHOT_VERSION,
+    decode_fund_nav_points,
+    decode_stock_bars,
+    decode_stock_valuation_points,
+    serialize_fund_nav_point,
+    serialize_stock_bar,
+    serialize_stock_valuation_point,
+    validate_fund_nav_snapshot,
+    validate_stock_bar_snapshot,
+    validate_stock_valuation_snapshot,
+)
+from market_lens.storage.snapshots import ValidatedSnapshot, ValidatedSnapshotStore
 from market_lens.storage.sqlite_cache import SQLiteCache
 from market_lens.types import (
     AssetSearchResult,
@@ -264,8 +287,14 @@ COMMODITY_MAIN_CONTRACTS: dict[CommodityMainContractKey, CommodityMainContractSp
 
 
 class EastmoneyClient:
-    def __init__(self, cache: SQLiteCache | None = None) -> None:
+    def __init__(
+        self,
+        cache: SQLiteCache | None = None,
+        snapshot_store: ValidatedSnapshotStore | None = None,
+    ) -> None:
         self.cache = cache or SQLiteCache(settings.db_path)
+        self.snapshot_store = snapshot_store or ValidatedSnapshotStore(settings.db_path)
+        self._lkg_events: list[dict[str, Any]] = []
         self.timeout = settings.http_timeout
         self.retries = settings.http_retries
         self.headers = {
@@ -279,6 +308,105 @@ class EastmoneyClient:
             ),
             "Referer": "https://quote.eastmoney.com/",
         }
+
+    def consume_lkg_events(self) -> list[dict[str, Any]]:
+        events = list(getattr(self, "_lkg_events", []))
+        self._lkg_events = []
+        return events
+
+    def _delete_cached_response(self, url: str) -> None:
+        cache = getattr(self, "cache", None)
+        if cache is not None:
+            cache.delete(url)
+
+    def _save_lkg_snapshot(
+        self,
+        *,
+        dataset: str,
+        identity: dict[str, Any],
+        source: str,
+        validator_version: str,
+        rows: list[Any],
+        serializer: Callable[[Any], dict[str, Any]],
+        validator: Callable[[list[Any]], bool],
+    ) -> None:
+        if not rows or not validator(rows):
+            return
+        snapshot_store = getattr(self, "snapshot_store", None)
+        if snapshot_store is None:
+            return
+        snapshot_store.put(
+            dataset=dataset,
+            identity=identity,
+            source=source,
+            validator_version=validator_version,
+            payload=[serializer(row) for row in rows],
+            source_as_of=max(row.date for row in rows),
+            row_count=len(rows),
+        )
+
+    def _load_lkg_snapshot(
+        self,
+        *,
+        dataset: str,
+        identity: dict[str, Any],
+        allowed_sources: set[str],
+        validator_version: str,
+        decoder: Callable[[Any], list[Any]],
+        validator: Callable[[list[Any]], bool],
+    ) -> list[Any] | None:
+        snapshot_store = getattr(self, "snapshot_store", None)
+        if snapshot_store is None:
+            return None
+        decoded_rows: list[Any] = []
+
+        def validate_payload(payload: Any, source_as_of: date, row_count: int) -> bool:
+            try:
+                rows = decoder(payload)
+            except (KeyError, TypeError, ValueError):
+                return False
+            if (
+                len(rows) != row_count
+                or not rows
+                or max(row.date for row in rows) != source_as_of
+                or not validator(rows)
+            ):
+                return False
+            decoded_rows.extend(rows)
+            return True
+
+        snapshot = snapshot_store.get(
+            dataset=dataset,
+            identity=identity,
+            allowed_sources=allowed_sources,
+            validator_version=validator_version,
+            max_age_seconds=settings.lkg_max_age_seconds,
+            validator=validate_payload,
+        )
+        if snapshot is None:
+            return None
+        self._record_lkg_event(snapshot)
+        return decoded_rows
+
+    def _record_lkg_event(self, snapshot: ValidatedSnapshot) -> None:
+        events = getattr(self, "_lkg_events", None)
+        if events is None:
+            events = []
+            self._lkg_events = events
+        events.append(
+            {
+                "dataset": snapshot.dataset,
+                "identity": snapshot.identity,
+                "source": snapshot.source,
+                "source_as_of": snapshot.source_as_of.isoformat(),
+                "snapshot_retrieved_at": snapshot.retrieved_at.isoformat(),
+                "snapshot_age_seconds": snapshot.age_seconds,
+                "row_count": snapshot.row_count,
+                "payload_sha256": snapshot.payload_sha256,
+                "validator_version": snapshot.validator_version,
+                "fallback_reason": "upstream_unavailable",
+            }
+        )
 
     def get_stock_history(
         self,
@@ -294,9 +422,19 @@ class EastmoneyClient:
             raise ValueError("period must be one of: daily, weekly, monthly")
         if adjust not in adjust_map:
             raise ValueError("adjust must be one of: none, qfq, hfq")
+        if start > end:
+            raise ValueError("start must be on or before end")
 
+        stock_code = normalize_symbol(symbol)
+        identity = {
+            "symbol": stock_code,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "period": period,
+            "adjust": adjust,
+        }
         params = {
-            "secid": infer_secid(symbol),
+            "secid": infer_secid(stock_code),
             "fields1": "f1,f2,f3,f4,f5,f6",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
             "klt": period_map[period],
@@ -305,12 +443,53 @@ class EastmoneyClient:
             "end": compact_date(end),
         }
         url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(params)
-        payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
-        data = payload.get("data")
-        if not data:
-            return []
-        klines = data.get("klines") or []
-        return [parse_stock_kline(item) for item in klines]
+
+        def validator(rows: list[StockBar]) -> bool:
+            return validate_stock_bar_snapshot(
+                rows,
+                start=start,
+                end=end,
+                period=period,
+            )
+
+        try:
+            payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                raise EastmoneyError("Unexpected Eastmoney stock history response")
+            if str(data.get("code") or "").strip() != stock_code:
+                raise EastmoneyError("Eastmoney stock history identity mismatch")
+            klines = data.get("klines")
+            if not isinstance(klines, list):
+                raise EastmoneyError("Unexpected Eastmoney stock history rows")
+            bars = [parse_stock_kline(item) for item in klines]
+            if not validator(bars):
+                raise EastmoneyError("Invalid Eastmoney stock history snapshot")
+            self._save_lkg_snapshot(
+                dataset=STOCK_HISTORY_DATASET,
+                identity=identity,
+                source=EASTMONEY_PUSH2HIS_SOURCE,
+                validator_version=STOCK_HISTORY_SNAPSHOT_VERSION,
+                rows=bars,
+                serializer=serialize_stock_bar,
+                validator=validator,
+            )
+            return bars
+        except (EastmoneyError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            self._delete_cached_response(url)
+            snapshot_rows = self._load_lkg_snapshot(
+                dataset=STOCK_HISTORY_DATASET,
+                identity=identity,
+                allowed_sources={EASTMONEY_PUSH2HIS_SOURCE},
+                validator_version=STOCK_HISTORY_SNAPSHOT_VERSION,
+                decoder=decode_stock_bars,
+                validator=validator,
+            )
+            if snapshot_rows is not None:
+                return snapshot_rows
+            if isinstance(exc, EastmoneyError):
+                raise
+            raise EastmoneyError("Unexpected Eastmoney stock history response") from exc
 
     def get_commodity_main_contract_history(
         self,
@@ -342,28 +521,93 @@ class EastmoneyClient:
 
     def get_stock_valuation(self, symbol: str) -> list[StockValuationPoint]:
         stock_code = normalize_symbol(symbol)
+        identity = {"symbol": stock_code}
         filter_value = quote(f'(SECURITY_CODE="{stock_code}")', safe="()=")
         params = {
             "sortColumns": "TRADE_DATE",
             "sortTypes": "-1",
             "pageSize": "5000",
-            "pageNumber": "1",
             "reportName": "RPT_VALUEANALYSIS_DET",
             "columns": "ALL",
             "quoteColumns": "",
             "source": "WEB",
             "client": "WEB",
         }
-        url = (
-            "https://datacenter-web.eastmoney.com/api/data/v1/get?"
-            + urlencode(params)
-            + f"&filter={filter_value}"
-        )
-        payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
-        result = payload.get("result") or {}
-        rows = result.get("data") or []
-        points = [parse_stock_valuation_row(row) for row in rows]
-        return sorted(points, key=lambda item: item.date)
+        requested_urls: list[str] = []
+
+        def page_url(page: int) -> str:
+            page_params = {**params, "pageNumber": str(page)}
+            return (
+                "https://datacenter-web.eastmoney.com/api/data/v1/get?"
+                + urlencode(page_params)
+                + f"&filter={filter_value}"
+            )
+
+        def validator(rows: list[StockValuationPoint]) -> bool:
+            return validate_stock_valuation_snapshot(
+                rows,
+                expected_code=stock_code,
+            )
+
+        try:
+            url = page_url(1)
+            requested_urls.append(url)
+            payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                raise EastmoneyError("Unexpected Eastmoney stock valuation response")
+            raw_rows = result.get("data")
+            if not isinstance(raw_rows, list):
+                raise EastmoneyError("Unexpected Eastmoney stock valuation rows")
+            pages = int(result.get("pages") or 1)
+            if not 1 <= pages <= 20:
+                raise EastmoneyError("Invalid Eastmoney stock valuation pagination")
+            all_rows = list(raw_rows)
+            for page in range(2, pages + 1):
+                url = page_url(page)
+                requested_urls.append(url)
+                page_payload = self._get_json(url, ttl_seconds=24 * 60 * 60)
+                page_result = page_payload.get("result")
+                if not isinstance(page_result, dict):
+                    raise EastmoneyError("Unexpected Eastmoney stock valuation page response")
+                page_rows = page_result.get("data")
+                if not isinstance(page_rows, list) or int(page_result.get("pages") or 1) != pages:
+                    raise EastmoneyError(
+                        "Eastmoney stock valuation pagination changed during request"
+                    )
+                all_rows.extend(page_rows)
+            points = sorted(
+                [parse_stock_valuation_row(row) for row in all_rows],
+                key=lambda item: item.date,
+            )
+            if not validator(points):
+                raise EastmoneyError("Invalid Eastmoney stock valuation snapshot")
+            self._save_lkg_snapshot(
+                dataset=STOCK_VALUATION_DATASET,
+                identity=identity,
+                source=EASTMONEY_DATACENTER_SOURCE,
+                validator_version=STOCK_VALUATION_SNAPSHOT_VERSION,
+                rows=points,
+                serializer=serialize_stock_valuation_point,
+                validator=validator,
+            )
+            return points
+        except (EastmoneyError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            for requested_url in requested_urls:
+                self._delete_cached_response(requested_url)
+            snapshot_rows = self._load_lkg_snapshot(
+                dataset=STOCK_VALUATION_DATASET,
+                identity=identity,
+                allowed_sources={EASTMONEY_DATACENTER_SOURCE},
+                validator_version=STOCK_VALUATION_SNAPSHOT_VERSION,
+                decoder=decode_stock_valuation_points,
+                validator=validator,
+            )
+            if snapshot_rows is not None:
+                return snapshot_rows
+            if isinstance(exc, EastmoneyError):
+                raise
+            raise EastmoneyError("Unexpected Eastmoney stock valuation response") from exc
 
     def get_stock_industry_valuation_snapshot(
         self,
@@ -1256,25 +1500,106 @@ class EastmoneyClient:
         page_size: int = 200,
     ) -> list[FundNavPoint]:
         normalized_code = normalize_fund_code(code)
+        if start > end:
+            raise ValueError("start must be on or before end")
+        identity = {
+            "code": normalized_code,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        }
+
+        def validator(rows: list[FundNavPoint]) -> bool:
+            return validate_fund_nav_snapshot(rows, start=start, end=end)
+
         overview_url = f"https://fund.eastmoney.com/pingzhongdata/{normalized_code}.js"
         try:
             overview = self._get_text(overview_url, ttl_seconds=24 * 60 * 60)
-            return parse_pingzhongdata_fund_nav(
+            points = parse_pingzhongdata_fund_nav(
                 overview,
                 expected_code=normalized_code,
                 start=start,
                 end=end,
             )
-        except EastmoneyError:
-            pass
+            if not validator(points):
+                raise EastmoneyError("Invalid Eastmoney fund NAV overview snapshot")
+            self._save_lkg_snapshot(
+                dataset=FUND_NAV_DATASET,
+                identity=identity,
+                source=EASTMONEY_PINGZHONGDATA_SOURCE,
+                validator_version=FUND_NAV_SNAPSHOT_VERSION,
+                rows=points,
+                serializer=serialize_fund_nav_point,
+                validator=validator,
+            )
+            return points
+        except (EastmoneyError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            overview_error = exc
+            self._delete_cached_response(overview_url)
 
-        first_page = self._get_fund_nav_page(code, start, end, page=1, page_size=page_size)
-        pages = int(first_page.get("pages") or 1)
-        rows = list(first_page["rows"])
-        for page in range(2, pages + 1):
-            page_data = self._get_fund_nav_page(code, start, end, page=page, page_size=page_size)
-            rows.extend(page_data["rows"])
-        return sorted(rows, key=lambda item: item.date)
+        try:
+            first_page = self._get_fund_nav_page(
+                normalized_code,
+                start,
+                end,
+                page=1,
+                page_size=page_size,
+            )
+            pages = int(first_page.get("pages") or 1)
+            records = int(first_page.get("records") or 0)
+            if int(first_page.get("curpage") or 0) != 1:
+                raise EastmoneyError("Unexpected Eastmoney F10 fund NAV first page")
+            rows = list(first_page["rows"])
+            for page in range(2, pages + 1):
+                page_data = self._get_fund_nav_page(
+                    normalized_code,
+                    start,
+                    end,
+                    page=page,
+                    page_size=page_size,
+                )
+                if (
+                    int(page_data.get("curpage") or 0) != page
+                    or int(page_data.get("pages") or 0) != pages
+                    or int(page_data.get("records") or 0) != records
+                ):
+                    raise EastmoneyError("Eastmoney F10 fund NAV pagination changed during request")
+                rows.extend(page_data["rows"])
+            if len(rows) != records:
+                raise EastmoneyError("Incomplete Eastmoney F10 fund NAV pagination")
+            points = sorted(rows, key=lambda item: item.date)
+            if not validator(points):
+                raise EastmoneyError("Invalid Eastmoney F10 fund NAV snapshot")
+            self._save_lkg_snapshot(
+                dataset=FUND_NAV_DATASET,
+                identity=identity,
+                source=EASTMONEY_F10_NAV_SOURCE,
+                validator_version=FUND_NAV_SNAPSHOT_VERSION,
+                rows=points,
+                serializer=serialize_fund_nav_point,
+                validator=validator,
+            )
+            return points
+        except (EastmoneyError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            f10_error = exc
+
+        snapshot_rows = self._load_lkg_snapshot(
+            dataset=FUND_NAV_DATASET,
+            identity=identity,
+            allowed_sources={
+                EASTMONEY_PINGZHONGDATA_SOURCE,
+                EASTMONEY_F10_NAV_SOURCE,
+            },
+            validator_version=FUND_NAV_SNAPSHOT_VERSION,
+            decoder=decode_fund_nav_points,
+            validator=validator,
+        )
+        if snapshot_rows is not None:
+            return snapshot_rows
+        if isinstance(f10_error, EastmoneyError):
+            raise f10_error
+        if isinstance(overview_error, EastmoneyError):
+            raise overview_error
+        raise EastmoneyError("Unexpected Eastmoney fund NAV response") from f10_error
 
     def get_exchange_fund_price_nav(
         self,
@@ -1290,10 +1615,23 @@ class EastmoneyClient:
             raise ValueError("period must be one of: daily, weekly, monthly")
         if adjust not in adjust_map:
             raise ValueError("adjust must be one of: none, qfq, hfq")
+        if start > end:
+            raise ValueError("start must be on or before end")
 
-        secid = infer_exchange_fund_secid(code)
+        normalized_code = normalize_fund_code(code)
+        secid = infer_exchange_fund_secid(normalized_code)
         if secid is None:
             return []
+        identity = {
+            "code": normalized_code,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "period": period,
+            "adjust": adjust,
+        }
+
+        def validator(rows: list[FundNavPoint]) -> bool:
+            return validate_fund_nav_snapshot(rows, start=start, end=end)
 
         params = {
             "secid": secid,
@@ -1305,23 +1643,62 @@ class EastmoneyClient:
             "end": compact_date(end),
         }
         url = "https://push2his.eastmoney.com/api/qt/stock/kline/get?" + urlencode(params)
-        payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
-        data = payload.get("data")
-        if not data:
-            return []
-        klines = data.get("klines") or []
-        bars = [parse_stock_kline(item) for item in klines]
-        return [
-            FundNavPoint(
-                date=bar.date,
-                unit_nav=bar.close,
-                cumulative_nav=bar.close,
-                daily_growth_pct=bar.change_pct,
-                subscribe_status="场内价格",
-                redeem_status="场内价格",
+        try:
+            payload = self._get_json(url, ttl_seconds=12 * 60 * 60)
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                raise EastmoneyError("Unexpected Eastmoney exchange fund price response")
+            if str(data.get("code") or "").strip() != normalized_code:
+                raise EastmoneyError("Eastmoney exchange fund price identity mismatch")
+            klines = data.get("klines")
+            if not isinstance(klines, list):
+                raise EastmoneyError("Unexpected Eastmoney exchange fund price rows")
+            bars = [parse_stock_kline(item) for item in klines]
+            if not validate_stock_bar_snapshot(
+                bars,
+                start=start,
+                end=end,
+                period=period,
+            ):
+                raise EastmoneyError("Invalid Eastmoney exchange fund price snapshot")
+            points = [
+                FundNavPoint(
+                    date=bar.date,
+                    unit_nav=bar.close,
+                    cumulative_nav=bar.close,
+                    daily_growth_pct=bar.change_pct,
+                    subscribe_status="场内价格",
+                    redeem_status="场内价格",
+                )
+                for bar in bars
+            ]
+            if not validator(points):
+                raise EastmoneyError("Invalid Eastmoney exchange fund NAV snapshot")
+            self._save_lkg_snapshot(
+                dataset=EXCHANGE_FUND_PRICE_DATASET,
+                identity=identity,
+                source=EASTMONEY_PUSH2HIS_SOURCE,
+                validator_version=FUND_NAV_SNAPSHOT_VERSION,
+                rows=points,
+                serializer=serialize_fund_nav_point,
+                validator=validator,
             )
-            for bar in bars
-        ]
+            return points
+        except (EastmoneyError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            self._delete_cached_response(url)
+            snapshot_rows = self._load_lkg_snapshot(
+                dataset=EXCHANGE_FUND_PRICE_DATASET,
+                identity=identity,
+                allowed_sources={EASTMONEY_PUSH2HIS_SOURCE},
+                validator_version=FUND_NAV_SNAPSHOT_VERSION,
+                decoder=decode_fund_nav_points,
+                validator=validator,
+            )
+            if snapshot_rows is not None:
+                return snapshot_rows
+            if isinstance(exc, EastmoneyError):
+                raise
+            raise EastmoneyError("Unexpected Eastmoney exchange fund price response") from exc
 
     def get_index_history(
         self,
@@ -1502,10 +1879,14 @@ class EastmoneyClient:
     def _get_json(self, url: str, ttl_seconds: int) -> dict[str, Any]:
         text = self._get_text(url, ttl_seconds=ttl_seconds)
         try:
-            return json.loads(text)
+            payload = json.loads(text)
         except json.JSONDecodeError as exc:
             host = urlparse(url).netloc
             raise EastmoneyError(f"Unexpected JSON response from {host}") from exc
+        if not isinstance(payload, dict):
+            host = urlparse(url).netloc
+            raise EastmoneyError(f"Unexpected JSON object response from {host}")
+        return payload
 
     def _get_validated_json(
         self,
@@ -1880,6 +2261,8 @@ def mojibake_score(value: str) -> int:
 
 
 def parse_stock_kline(item: str) -> StockBar:
+    if not isinstance(item, str):
+        raise EastmoneyError(f"Unexpected stock kline row: {item!r}")
     fields = item.split(",")
     if len(fields) < 11:
         raise EastmoneyError(f"Unexpected stock kline row: {item}")
@@ -1896,6 +2279,8 @@ def parse_stock_kline(item: str) -> StockBar:
         change_amount=to_float(fields[9]),
         turnover_pct=to_float(fields[10]),
     )
+
+
 
 
 def commodity_main_contract_spec(

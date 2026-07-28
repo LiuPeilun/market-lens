@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from math import isfinite
 from typing import Any
 
 from market_lens.data.eastmoney import (
@@ -71,6 +72,7 @@ class MarketAnalysisAgent:
     ) -> dict[str, Any]:
         retrieved_at = datetime.now(UTC)
         if asset_type == "stock":
+            consume_lkg_events(self.data_client)
             all_valuations = self.data_client.get_stock_valuation(code)
             stock_name = next((item.name for item in reversed(all_valuations) if item.name), None)
             valuations = [item for item in all_valuations if start <= item.date <= end]
@@ -86,6 +88,7 @@ class MarketAnalysisAgent:
                         "If this is a fund code, choose asset_type='fund'."
                     ),
                 )
+            critical_lkg_events = consume_lkg_events(self.data_client)
             profile = None
             financials = []
             financials_error = None
@@ -153,6 +156,8 @@ class MarketAnalysisAgent:
                 errors=detailed_errors,
                 retrieved_at=retrieved_at,
             )
+            consume_lkg_events(self.data_client)
+            apply_last_known_good_diagnostics(result, critical_lkg_events)
             return result
         if asset_type == "fund":
             product_info = None
@@ -173,6 +178,7 @@ class MarketAnalysisAgent:
                     retrieved_at=retrieved_at,
                 )
 
+            consume_lkg_events(self.data_client)
             try:
                 nav_points = self.data_client.get_exchange_fund_price_nav(
                     code,
@@ -189,6 +195,7 @@ class MarketAnalysisAgent:
                     "fund_nav_data_unavailable",
                     f"No fund NAV data found for {code}.",
                 )
+            critical_lkg_events = consume_lkg_events(self.data_client)
             fund_name = self.data_client.get_fund_name(code)
             holdings_route = None
             try:
@@ -330,6 +337,8 @@ class MarketAnalysisAgent:
                 product_profile=product_profile,
                 retrieved_at=retrieved_at,
             )
+            consume_lkg_events(self.data_client)
+            apply_last_known_good_diagnostics(result, critical_lkg_events)
             return result
         raise InvalidRequestError(
             "unsupported_asset_type",
@@ -754,6 +763,76 @@ class MarketAnalysisAgent:
         except (EastmoneyError, ValueError) as exc:
             return None, str(exc)
         return snapshot, None
+
+
+def consume_lkg_events(data_client: Any) -> list[dict[str, Any]]:
+    consume = getattr(data_client, "consume_lkg_events", None)
+    if not callable(consume):
+        return []
+    events = consume()
+    if not isinstance(events, list):
+        return []
+    return [event for event in events if isinstance(event, dict)]
+
+
+def apply_last_known_good_diagnostics(
+    result: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> None:
+    if not events:
+        return
+    snapshots = [dict(event) for event in events]
+    result["last_known_good"] = {
+        "used": True,
+        "snapshot_count": len(snapshots),
+        "snapshots": snapshots,
+    }
+    notes = result.setdefault("notes", [])
+    note = (
+        "One or more critical market datasets use validated last-known-good snapshots; "
+        "see assessment.data_quality for source dates and snapshot ages."
+    )
+    if note not in notes:
+        notes.insert(0, note)
+
+    assessment = result.get("assessment")
+    if not isinstance(assessment, dict):
+        return
+    fallback_reasons = assessment.setdefault("fallback_reasons", [])
+    if "last_known_good_snapshot" not in fallback_reasons:
+        fallback_reasons.append("last_known_good_snapshot")
+
+    data_quality = assessment.setdefault("data_quality", {})
+    sources = data_quality.setdefault("sources", [])
+    warnings = data_quality.setdefault("warnings", [])
+    for event in snapshots:
+        sources.append(
+            {
+                "key": event.get("dataset"),
+                "source": event.get("source"),
+                "status": "last_known_good",
+                "source_as_of": event.get("source_as_of"),
+                "retrieved_at": event.get("snapshot_retrieved_at"),
+                "snapshot_age_seconds": event.get("snapshot_age_seconds"),
+                "row_count": event.get("row_count"),
+                "payload_sha256": event.get("payload_sha256"),
+                "validator_version": event.get("validator_version"),
+                "request_identity": event.get("identity"),
+                "reason": event.get("fallback_reason"),
+            }
+        )
+    warning = (
+        "Validated last-known-good market data was used because the live source was "
+        "unavailable or invalid; the snapshot is not current live data."
+    )
+    if warning not in warnings:
+        warnings.append(warning)
+
+    valuation = (assessment.get("dimensions") or {}).get("valuation") or {}
+    score = valuation.get("score")
+    if isinstance(score, int | float) and not isinstance(score, bool) and isfinite(score):
+        assessment["status"] = "degraded"
+        assessment["method"] = "last_known_good"
 
 
 def preserve_fund_valuation_context(

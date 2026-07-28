@@ -78,6 +78,48 @@ Authentication, chat-session creation, initial streamed user-message storage,
 and tool-approval state remain fail-closed because the request cannot be safely
 executed or resumed without them.
 
+## Validated Last-Known-Good Contract
+
+Last-known-good (LKG) snapshots are stored separately from the raw HTTP cache.
+Raw responses never become fallback data merely because an HTTP request
+succeeded. Only normalized typed rows that pass dataset-specific validation can
+replace an existing snapshot.
+
+Each snapshot records:
+
+- Dataset name and exact request identity.
+- Fixed allowlisted source identity.
+- Snapshot schema and dataset validator versions.
+- Canonical normalized JSON, SHA-256, source date, retrieval time, and row count.
+
+Reads fail closed unless dataset, request identity, source, schema version,
+validator version, hash, row count, maximum age, and the current dataset
+validator all match. The default retrieval-age limit is seven days and can be
+configured with `MARKET_LENS_LKG_MAX_AGE_SECONDS`.
+
+The first protected datasets are:
+
+| Dataset | Request identity | Allowed source |
+| --- | --- | --- |
+| Stock price history | Symbol, start, end, period, adjustment | `eastmoney_push2his` |
+| Stock valuation history | Symbol | `eastmoney_datacenter` |
+| Exchange fund price history | Code, start, end, period, adjustment | `eastmoney_push2his` |
+| Fund NAV history | Code, start, end | `eastmoney_pingzhongdata`, `eastmoney_f10_nav` |
+
+Validators reject empty rows, duplicate or unordered dates, future dates,
+out-of-range dates, non-finite values, invalid OHLC relationships, negative
+volume or amount, mismatched stock codes, missing required NAV values, stale
+tails, and inconsistent pagination. A malformed live response is removed from
+the HTTP cache and cannot overwrite the last valid snapshot.
+
+Using LKG never changes a valuation score or confidence calculation. A numeric
+assessment is explicitly changed to `status=degraded` and
+`method=last_known_good`; `fallback_reasons` includes
+`last_known_good_snapshot`. Source date, snapshot age, row count, hash,
+validator version, and request identity are exposed in
+`assessment.data_quality`. If no numeric score exists, the assessment remains
+`unavailable`.
+
 ### Status Semantics
 
 | Status | Rule |
@@ -98,7 +140,7 @@ primary valuation method passed its own scoring gates.
 | `index_fundamental_valuation` | Verified official index fundamental history |
 | `holdings_valuation` | Weighted verified fund, ETF, or index holdings |
 | `price_position_proxy` | Historical price or NAV position, explicitly not fundamental valuation |
-| `last_known_good` | Reserved for a later audited snapshot fallback |
+| `last_known_good` | A numeric result used one or more explicitly disclosed validated LKG inputs |
 | `unavailable` | No numeric valuation method passed |
 
 ## Current Interruption Audit
@@ -111,9 +153,9 @@ Priority definitions:
 
 | ID | Priority | Location | Current behavior | Required follow-up |
 | --- | --- | --- | --- | --- |
-| ST-01 | P0 | `MarketAnalysisAgent.analyze`, stock valuation load | `get_stock_valuation` is unguarded; an upstream error aborts the analysis | Isolate source failure and continue to verified price-position or last-known-good fallback |
-| ST-02 | P0 | `MarketAnalysisAgent.analyze`, stock price load | Empty history and empty valuation-derived bars raise `ValueError` | Return structured `unavailable`, or use an audited cached snapshot |
-| ST-03 | P0 | `MarketAnalysisAgent.analyze`, fund NAV load | Fund NAV fallback is unguarded; empty NAV raises `ValueError` | Add primary/secondary/LKG NAV route and structured terminal result |
+| ST-01 | P0 (partial) | `MarketAnalysisAgent.analyze`, stock valuation load | Exact validated LKG history is used when available; no-snapshot source failure still aborts | Add the deterministic no-LKG stock degradation route |
+| ST-02 | P0 (partial) | `MarketAnalysisAgent.analyze`, stock price load | Exact validated LKG or valuation-derived bars can preserve output | Return structured `unavailable` when neither route is valid |
+| ST-03 | P0 (partial) | `MarketAnalysisAgent.analyze`, fund NAV load | Exchange price, ordinary NAV, and exact validated LKG routes are available | Return a structured terminal assessment when all routes fail |
 | ST-04 | P1 | `MarketAnalysisAgent.analyze`, fund name load | Name lookup is unguarded after NAV succeeds | Preserve code-based analysis and mark name source unavailable |
 | ST-05 | P1 | REIT profile resolution | Product classification can select REIT, then profile loading can abort | Return a REIT `unavailable` assessment with source diagnostics |
 | ST-06 | P1 | Index price fallback discovery | `find_index_for_fund` can fail while attempting the final proxy | Isolate discovery and retain the existing holdings result |
@@ -122,7 +164,7 @@ Priority definitions:
 | ST-09 | P0 | Chat analysis tool call | Any finance tool error terminates the chat preparation path | Return and explain the structured degraded/unavailable assessment |
 | ST-10 | P0 | Finance tool executor | The entire analysis has one 90-second timeout and discards late partial work | Add bounded stage budgets and persist usable intermediate snapshots |
 | ST-11 | P0 | Frontend `requestJson` | Non-2xx responses are converted to an exception; no structured partial result can render | Render assessment status independently from transport and persistence warnings |
-| ST-12 | P0 | `SQLiteCache` | Cache only returns entries inside TTL; there is no validated stale/LKG read path or snapshot metadata | Add an immutable validated snapshot store with maximum stale ages |
+| ST-12 | P0 (resolved) | `ValidatedSnapshotStore` | Normalized snapshots enforce identity, source, versions, age, hash, row count, and dataset validation | Keep corruption, staleness, malformed-response, and fallback tests |
 | ST-13 | P1 | Fund holdings route | Holdings failures are isolated, but the caught error is dropped when the route object is absent | Preserve stable source failure codes in the assessment |
 | ST-14 | P2 | Source health | No aggregate source success rate, last success time, or circuit state is exposed | Add source health diagnostics after fallback routes are implemented |
 
@@ -144,10 +186,9 @@ not the first interruption targets.
 
 After this contract and audit:
 
-1. Add validated last-known-good snapshots with source identity and age limits.
-2. Implement stock, fund, and index deterministic fallback matrices.
-3. Return structured unavailable results for terminal no-data cases.
-4. Render complete, degraded, stale, unavailable, and persistence states in the frontend.
-5. Add outage, malformed response, route mismatch, future-data, and timeout tests.
+1. Implement stock, fund, and index deterministic fallback matrices.
+2. Return structured unavailable results for terminal no-data cases.
+3. Render complete, degraded, stale, unavailable, and persistence states in the frontend.
+4. Add remaining route-mismatch, timeout, and partial-tool failure injection tests.
 
 Strategy factors and weights remain frozen until these stability gates pass.
