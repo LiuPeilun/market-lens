@@ -197,6 +197,7 @@ def analyze_fund_valuation(
     name: str | None = None,
     holdings: list[FundHolding] | None = None,
     holding_analyses: dict[str, dict[str, Any]] | None = None,
+    equity_allocation_pct: float | None = None,
 ) -> dict[str, Any]:
     profile = infer_fund_profile(name)
     holdings = holdings or []
@@ -211,12 +212,22 @@ def analyze_fund_valuation(
         result.update(
             {
                 "status": "holdings_after_analysis_date",
-                "holdings": summarize_holdings(holdings, holding_analyses, latest_nav_date),
+                "holdings": summarize_holdings(
+                    holdings,
+                    holding_analyses,
+                    latest_nav_date,
+                    equity_allocation_pct=equity_allocation_pct,
+                ),
             }
         )
         return result
 
-    portfolio = build_holdings_portfolio(holdings, holding_analyses, nav_points)
+    portfolio = build_holdings_portfolio(
+        holdings,
+        holding_analyses,
+        nav_points,
+        equity_allocation_pct=equity_allocation_pct,
+    )
     factor_results: list[dict[str, Any]] = []
     missing_factors: list[str] = []
     total_model_weight = sum(factor.weight for factor in profile.factors)
@@ -273,7 +284,12 @@ def analyze_fund_valuation(
         "status": "holdings_valuation" if score is not None else "valuation_data_pending",
         "nav_sample_size": len(nav_points),
         "portfolio": portfolio,
-        "holdings": summarize_holdings(holdings, holding_analyses, latest_nav_date),
+        "holdings": summarize_holdings(
+            holdings,
+            holding_analyses,
+            latest_nav_date,
+            equity_allocation_pct=equity_allocation_pct,
+        ),
     }
 
 
@@ -311,7 +327,14 @@ def build_holdings_portfolio(
     holdings: list[FundHolding],
     analyses: dict[str, dict[str, Any]],
     nav_points: list[FundNavPoint],
+    *,
+    equity_allocation_pct: float | None = None,
 ) -> dict[str, Any]:
+    coverage_denominator = (
+        equity_allocation_pct / 100.0
+        if equity_allocation_pct is not None and equity_allocation_pct > 0
+        else 1.0
+    )
     metric_paths = {
         "weighted_pe_ttm": ("valuation", "pe_ttm"),
         "weighted_pb": ("valuation", "pb"),
@@ -349,6 +372,7 @@ def build_holdings_portfolio(
             analyses,
             path,
             positive=key in {"weighted_pe_ttm", "weighted_pb"},
+            coverage_denominator=coverage_denominator,
         )
         for key, path in metric_paths.items()
     }
@@ -367,6 +391,7 @@ def weighted_holding_metric(
     analyses: dict[str, dict[str, Any]],
     path: tuple[str, ...],
     positive: bool = False,
+    coverage_denominator: float = 1.0,
 ) -> dict[str, float | None]:
     weighted_sum = 0.0
     available_weight = 0.0
@@ -381,7 +406,11 @@ def weighted_holding_metric(
         available_count += 1
     return {
         "value": round(weighted_sum / available_weight, 6) if available_weight else None,
-        "coverage": round(available_weight, 4),
+        "coverage": (
+            round(min(available_weight / coverage_denominator, 1.0), 4)
+            if coverage_denominator > 0
+            else 0.0
+        ),
         "sample_size": available_count,
     }
 
@@ -418,11 +447,23 @@ def summarize_holdings(
     holdings: list[FundHolding],
     analyses: dict[str, dict[str, Any]],
     as_of: date,
+    *,
+    equity_allocation_pct: float | None = None,
 ) -> dict[str, Any]:
     report_date = next((item.report_date for item in holdings if item.report_date), None)
     total_weight = sum(item.weight_pct or 0.0 for item in holdings)
     analyzed_weight = sum(
         item.weight_pct or 0.0 for item in holdings if analyses.get(item.code) is not None
+    )
+    disclosed_equity_coverage = (
+        min(total_weight / equity_allocation_pct, 1.0)
+        if equity_allocation_pct is not None and equity_allocation_pct > 0
+        else min(total_weight / 100.0, 1.0)
+    )
+    analyzed_equity_coverage = (
+        min(analyzed_weight / equity_allocation_pct, 1.0)
+        if equity_allocation_pct is not None and equity_allocation_pct > 0
+        else min(analyzed_weight / 100.0, 1.0)
     )
     return {
         "report_date": report_date.isoformat() if report_date else None,
@@ -431,6 +472,9 @@ def summarize_holdings(
         "analyzed_count": sum(1 for item in holdings if analyses.get(item.code) is not None),
         "top_holdings_weight": round(total_weight / 100.0, 4),
         "analyzed_holdings_weight": round(analyzed_weight / 100.0, 4),
+        "equity_allocation_pct": equity_allocation_pct,
+        "disclosed_equity_coverage": round(disclosed_equity_coverage, 4),
+        "analyzed_equity_coverage": round(analyzed_equity_coverage, 4),
         "items": [serialize_holding(item, analyses.get(item.code)) for item in holdings],
     }
 

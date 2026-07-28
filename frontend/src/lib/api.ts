@@ -134,6 +134,22 @@ export interface FundHoldingsRouteInfo {
   tracked_index_name: string | null
   target_etf_code: string | null
   target_etf_name: string | null
+  equity_allocation_pct: number | null
+  nav_equity_exposure: number | null
+  unexplained_equity_weight_pct: number | null
+  latest_top10: FundHoldingsSnapshotInfo | null
+  full_disclosure: FundHoldingsSnapshotInfo | null
+}
+
+export interface FundHoldingsSnapshotInfo {
+  source: string
+  scope: string
+  as_of: string
+  count: number
+  total_nav_weight_pct: number
+  equity_allocation_pct: number | null
+  equity_coverage: number
+  unexplained_equity_weight_pct: number | null
 }
 
 export type AssessmentDimensionCategory = 'valuation' | 'quality' | 'product'
@@ -239,6 +255,9 @@ export interface AnalysisResult {
       analyzed_count: number
       top_holdings_weight: number
       analyzed_holdings_weight: number
+      equity_allocation_pct?: number | null
+      disclosed_equity_coverage?: number
+      analyzed_equity_coverage?: number
       items: Array<{
         rank: number
         code: string

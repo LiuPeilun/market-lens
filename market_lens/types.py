@@ -396,6 +396,29 @@ class FundHolding:
 
 
 @dataclass(frozen=True)
+class FundAssetAllocation:
+    report_date: date
+    stock_pct: float | None
+    bond_pct: float | None
+    cash_pct: float | None
+    other_pct: float | None
+    net_assets_100m_cny: float | None
+    source: str = "eastmoney_fund_asset_allocation"
+
+
+@dataclass(frozen=True)
+class FundHoldingsSnapshot:
+    holdings: list[FundHolding]
+    source: str
+    scope: str
+    as_of: date
+    total_nav_weight_pct: float
+    equity_allocation_pct: float | None
+    equity_coverage: float
+    unexplained_equity_weight_pct: float | None
+
+
+@dataclass(frozen=True)
 class FundTrackingInfo:
     fund_code: str
     fund_name: str | None
@@ -430,6 +453,11 @@ class FundHoldingsRoute:
     coverage: float
     tracking: FundTrackingInfo | None
     fallback_reasons: tuple[str, ...] = ()
+    equity_allocation_pct: float | None = None
+    nav_equity_exposure: float | None = None
+    unexplained_equity_weight_pct: float | None = None
+    latest_top10: FundHoldingsSnapshot | None = None
+    full_disclosure: FundHoldingsSnapshot | None = None
 
 
 @dataclass(frozen=True)

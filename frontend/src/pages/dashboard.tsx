@@ -1075,7 +1075,11 @@ function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResul
     {
       icon: <Database className="size-4 text-accent" />,
       label: '已分析持仓',
-      value: formatPercent(valuation?.holdings?.analyzed_holdings_weight, 1),
+      value: formatPercent(
+        valuation?.holdings?.analyzed_equity_coverage ??
+          valuation?.holdings?.analyzed_holdings_weight,
+        1,
+      ),
       visible: result?.asset_type === 'fund',
     },
   ].filter((item) => item.visible !== false)
@@ -1375,6 +1379,9 @@ function FundHoldingsTable({ result }: { result: AnalysisResult | undefined }) {
 }
 
 function holdingsScopeLabel(scope: string | undefined) {
+  if (scope === 'tracked_index_full_weights') return '跟踪指数完整成分权重'
+  if (scope === 'target_etf_full_disclosure') return '目标 ETF 完整披露持仓'
+  if (scope === 'fund_full_disclosure') return '基金完整披露持仓'
   if (scope === 'tracked_index_top10') return '跟踪指数前十大成分'
   if (scope === 'target_etf_top10') return '目标 ETF 前十大持仓'
   if (scope === 'fund_direct_top10') return '基金直接前十大持仓'

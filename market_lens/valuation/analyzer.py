@@ -8,6 +8,7 @@ from typing import Any
 from market_lens.types import (
     FundHolding,
     FundHoldingsRoute,
+    FundHoldingsSnapshot,
     FundNavPoint,
     FundProductInfo,
     StockBar,
@@ -586,6 +587,9 @@ def analyze_fund(
         name=name,
         holdings=holdings,
         holding_analyses=holding_analyses,
+        equity_allocation_pct=(
+            holdings_route.equity_allocation_pct if holdings_route else None
+        ),
     )
     routing = classify_fund_product(code, name, product_info, holdings_route)
     tracking_metrics = calculate_tracking_metrics(
@@ -635,11 +639,11 @@ def analyze_fund(
                 "same as holding-level valuation."
             ),
             (
-                "Holding-level valuation uses the latest disclosed top holdings "
-                "and their reported weights."
+                "Holding-level valuation uses the selected audited holdings snapshot "
+                "and its reported weights."
             ),
             "ROE and growth are quality context; they are not treated as cheapness scores.",
-            "Low top-holdings coverage or an old report date lowers confidence.",
+            "Low analyzed equity coverage or an old report date lowers confidence.",
             "This is a research summary, not investment advice.",
         ],
     }
@@ -662,6 +666,34 @@ def serialize_fund_holdings_route(
         "tracked_index_name": tracking.index_name if tracking else None,
         "target_etf_code": tracking.target_etf_code if tracking else None,
         "target_etf_name": tracking.target_etf_name if tracking else None,
+        "equity_allocation_pct": route.equity_allocation_pct if route else None,
+        "nav_equity_exposure": route.nav_equity_exposure if route else None,
+        "unexplained_equity_weight_pct": (
+            route.unexplained_equity_weight_pct if route else None
+        ),
+        "latest_top10": serialize_fund_holdings_snapshot(
+            route.latest_top10 if route else None
+        ),
+        "full_disclosure": serialize_fund_holdings_snapshot(
+            route.full_disclosure if route else None
+        ),
+    }
+
+
+def serialize_fund_holdings_snapshot(
+    snapshot: FundHoldingsSnapshot | None,
+) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "source": snapshot.source,
+        "scope": snapshot.scope,
+        "as_of": snapshot.as_of.isoformat(),
+        "count": len(snapshot.holdings),
+        "total_nav_weight_pct": snapshot.total_nav_weight_pct,
+        "equity_allocation_pct": snapshot.equity_allocation_pct,
+        "equity_coverage": snapshot.equity_coverage,
+        "unexplained_equity_weight_pct": snapshot.unexplained_equity_weight_pct,
     }
 
 

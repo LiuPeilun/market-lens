@@ -676,6 +676,9 @@ def fund_product_confidence_caps(
 
 def fund_quality_method_quality(route: dict[str, Any]) -> float:
     return {
+        "tracked_index_full_weights": 0.95,
+        "target_etf_full_disclosure": 0.9,
+        "fund_full_disclosure": 0.9,
         "tracked_index_top10": 0.9,
         "target_etf_top10": 0.7,
         "fund_direct_top10": 0.65,
@@ -908,7 +911,14 @@ def fund_route_quality(route: dict[str, Any], valuation: dict[str, Any]) -> floa
             )
         return 0.0
     scope = route.get("scope")
-    if scope in {"tracked_index_top10", "target_etf_top10", "fund_direct_top10"}:
+    if scope in {
+        "tracked_index_full_weights",
+        "target_etf_full_disclosure",
+        "fund_full_disclosure",
+        "tracked_index_top10",
+        "target_etf_top10",
+        "fund_direct_top10",
+    }:
         return max(0.1, min(float(route.get("coverage") or 0.0), 1.0))
     return 0.0
 

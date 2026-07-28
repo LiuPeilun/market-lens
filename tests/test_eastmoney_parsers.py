@@ -8,8 +8,10 @@ import pytest
 from market_lens.data.eastmoney import (
     EastmoneyClient,
     EastmoneyError,
+    build_fund_holdings_snapshot,
     build_index_search_keywords,
     build_search_keywords,
+    build_top10_from_snapshot,
     f10_stock_code,
     infer_exchange_fund_secid,
     infer_secid,
@@ -22,6 +24,8 @@ from market_lens.data.eastmoney import (
     parse_csi_index_top_holdings,
     parse_csi_index_weight_rows,
     parse_fund_archives_content,
+    parse_fund_asset_allocation_page,
+    parse_fund_holdings_sections,
     parse_fund_holdings_table,
     parse_fund_nav_row,
     parse_fund_nav_table,
@@ -43,7 +47,12 @@ from market_lens.data.eastmoney import (
     stock_history_year_chunks,
     tencent_stock_symbol,
 )
-from market_lens.types import FundHolding, FundTrackingInfo
+from market_lens.types import (
+    CsiIndexConstituentWeight,
+    FundAssetAllocation,
+    FundHolding,
+    FundTrackingInfo,
+)
 
 
 def test_infer_secid() -> None:
@@ -716,20 +725,46 @@ def test_fund_holdings_route_prefers_official_tracked_index(monkeypatch) -> None
         target_etf_code="159326",
         target_etf_name="电网设备ETF华夏",
     )
-    official = [FundHolding(1, "600487", "亨通光电", 10.47, None, None, date(2026, 7, 20))]
+    official = [
+        CsiIndexConstituentWeight(
+            rank=1,
+            report_date=date(2026, 6, 30),
+            index_code="931994",
+            index_name=tracking.index_name or "",
+            security_code="600487",
+            security_name="亨通光电",
+            exchange="SSE",
+            weight_pct=60.0,
+        ),
+        CsiIndexConstituentWeight(
+            rank=2,
+            report_date=date(2026, 6, 30),
+            index_code="931994",
+            index_name=tracking.index_name or "",
+            security_code="000400",
+            security_name="许继电气",
+            exchange="SZSE",
+            weight_pct=40.0,
+        ),
+    ]
     monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
-    monkeypatch.setattr(client, "get_csi_index_top_holdings", lambda code, top_n: official)
+    monkeypatch.setattr(client, "get_csi_index_full_weights", lambda code: official)
 
-    def fail_if_direct_holdings_are_used(code: str, top_n: int = 10):
-        raise AssertionError(f"direct holdings must not be used for {code}, top_n={top_n}")
+    def fail_if_top10_is_used(code: str, top_n: int = 10):
+        raise AssertionError(f"top ten must not be used for {code}, top_n={top_n}")
 
-    monkeypatch.setattr(client, "get_fund_holdings", fail_if_direct_holdings_are_used)
-    route = client.get_fund_holdings_route("025856")
+    monkeypatch.setattr(client, "get_csi_index_top_holdings", fail_if_top10_is_used)
+    route = client.get_fund_holdings_route(
+        "025856",
+        analysis_end=date(2026, 7, 24),
+    )
 
-    assert route.scope == "tracked_index_top10"
+    assert route.scope == "tracked_index_full_weights"
     assert route.source == "csindex_official"
-    assert route.coverage == 0.1047
-    assert route.holdings == official
+    assert route.coverage == 1.0
+    assert len(route.holdings) == 2
+    assert route.full_disclosure is not None
+    assert route.latest_top10 is not None
 
 
 def test_fund_holdings_route_falls_back_to_target_etf(monkeypatch) -> None:
@@ -743,8 +778,27 @@ def test_fund_holdings_route_falls_back_to_target_etf(monkeypatch) -> None:
         target_etf_code="159326",
         target_etf_name="电网设备ETF华夏",
     )
-    target_etf = [FundHolding(1, "600487", "亨通光电", 15.01, None, None, date(2026, 6, 30))]
+    target_top10 = build_fund_holdings_snapshot(
+        [FundHolding(1, "600487", "亨通光电", 15.01, None, None, date(2026, 6, 30))],
+        source="eastmoney_fund_disclosure",
+        scope="target_etf_top10",
+        equity_allocation_pct=99.9,
+    )
+    target_full = build_fund_holdings_snapshot(
+        [
+            FundHolding(1, "600487", "亨通光电", 55.0, None, None, date(2025, 12, 31)),
+            FundHolding(2, "000400", "许继电气", 44.8, None, None, date(2025, 12, 31)),
+        ],
+        source="eastmoney_fund_disclosure",
+        scope="target_etf_full_disclosure",
+        equity_allocation_pct=99.9,
+    )
     monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+    monkeypatch.setattr(
+        client,
+        "get_csi_index_full_weights",
+        lambda code: (_ for _ in ()).throw(EastmoneyError(f"full unavailable: {code}")),
+    )
 
     def fail_official_index(code: str, top_n: int = 10):
         raise EastmoneyError(f"official index unavailable: {code}, top_n={top_n}")
@@ -752,15 +806,24 @@ def test_fund_holdings_route_falls_back_to_target_etf(monkeypatch) -> None:
     monkeypatch.setattr(client, "get_csi_index_top_holdings", fail_official_index)
     monkeypatch.setattr(
         client,
-        "get_fund_holdings",
-        lambda code, top_n=10: target_etf if code == "159326" else [],
+        "get_fund_top10_snapshot",
+        lambda code, source, scope: target_top10,
     )
-    route = client.get_fund_holdings_route("025856")
+    monkeypatch.setattr(
+        client,
+        "get_fund_full_holdings_snapshot",
+        lambda code, as_of, scope: target_full,
+    )
+    route = client.get_fund_holdings_route(
+        "025856",
+        analysis_end=date(2026, 7, 24),
+    )
 
-    assert route.scope == "target_etf_top10"
-    assert route.coverage == 0.1501
-    assert route.holdings == target_etf
-    assert route.fallback_reasons[0].startswith("official_index_holdings_unavailable")
+    assert route.scope == "target_etf_full_disclosure"
+    assert route.coverage == pytest.approx(0.999)
+    assert route.holdings == target_full.holdings
+    assert route.latest_top10 == target_top10
+    assert route.fallback_reasons[0].startswith("official_index_full_weights_unavailable")
 
 
 def test_fund_holdings_route_uses_direct_holdings_for_active_fund(monkeypatch) -> None:
@@ -774,16 +837,41 @@ def test_fund_holdings_route_uses_direct_holdings_for_active_fund(monkeypatch) -
         target_etf_code=None,
         target_etf_name=None,
     )
-    direct = [FundHolding(1, "600519", "贵州茅台", 8.5, None, None, date(2026, 6, 30))]
+    direct_top10 = build_fund_holdings_snapshot(
+        [FundHolding(1, "600519", "贵州茅台", 8.5, None, None, date(2026, 6, 30))],
+        source="eastmoney_fund_disclosure",
+        scope="fund_direct_top10",
+        equity_allocation_pct=80.0,
+    )
+    direct_full = build_fund_holdings_snapshot(
+        [
+            FundHolding(1, "600519", "贵州茅台", 40.0, None, None, date(2025, 12, 31)),
+            FundHolding(2, "000858", "五粮液", 39.5, None, None, date(2025, 12, 31)),
+        ],
+        source="eastmoney_fund_disclosure",
+        scope="fund_full_disclosure",
+        equity_allocation_pct=80.0,
+    )
     monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
-    monkeypatch.setattr(client, "get_fund_holdings", lambda code, top_n=10: direct)
+    monkeypatch.setattr(client, "get_fund_top10_snapshot", lambda code: direct_top10)
+    monkeypatch.setattr(
+        client,
+        "get_fund_full_holdings_snapshot",
+        lambda code, as_of: direct_full,
+    )
 
-    route = client.get_fund_holdings_route("000001", fund_name=tracking.fund_name)
+    route = client.get_fund_holdings_route(
+        "000001",
+        fund_name=tracking.fund_name,
+        analysis_end=date(2026, 7, 24),
+    )
 
-    assert route.scope == "fund_direct_top10"
+    assert route.scope == "fund_full_disclosure"
     assert route.source == "eastmoney_fund_disclosure"
-    assert route.coverage == 0.085
-    assert route.holdings == direct
+    assert route.coverage == pytest.approx(0.9938)
+    assert route.equity_allocation_pct == 80.0
+    assert route.nav_equity_exposure == 0.8
+    assert route.holdings == direct_full.holdings
 
 
 def test_fund_holdings_route_fails_closed_for_unresolved_index_fund(monkeypatch) -> None:
@@ -955,6 +1043,148 @@ def test_parse_fund_holdings_table() -> None:
     assert rows[0].market_value_10k == 56789.1
     assert rows[0].report_date is not None
     assert rows[0].report_date.isoformat() == "2026-03-31"
+
+
+def test_parse_fund_holdings_sections_keeps_report_periods_separate() -> None:
+    content = """
+    <div class='box'><h4><a href='http://fund.eastmoney.com/515450.html'>ETF</a>
+    截止至：2025-12-31</h4><table><tbody>
+    <tr><td>1</td><td>600001</td><td>股票一</td><td>资讯</td>
+    <td>60.00%</td><td>100</td><td>600</td></tr>
+    <tr><td>2</td><td>000002</td><td>股票二</td><td>资讯</td>
+    <td>39.98%</td><td>200</td><td>400</td></tr>
+    </tbody></table></div>
+    <div class='box'><h4><a href='http://fund.eastmoney.com/515450.html'>ETF</a>
+    截止至：2025-09-30</h4><table><tbody>
+    <tr><td>1</td><td>600001</td><td>股票一</td><td>资讯</td>
+    <td>10.00%</td><td>100</td><td>100</td></tr>
+    </tbody></table></div>
+    """
+
+    sections = parse_fund_holdings_sections(content, expected_code="515450")
+
+    assert len(sections) == 2
+    assert sections[0][0].report_date == date(2025, 12, 31)
+    assert len(sections[0]) == 2
+    assert sum(item.weight_pct or 0 for item in sections[0]) == pytest.approx(99.98)
+    assert sections[1][0].report_date == date(2025, 9, 30)
+    assert len(sections[1]) == 1
+
+
+def test_parse_fund_asset_allocation_and_equity_coverage() -> None:
+    page = """
+    <title>红利低波50ETF南方(515450)基金资产配置</title>
+    <script>
+    var chartData ={"Dates":["2025-12-31"],"GP":[99.99],"ZQ":[0.0],
+    "XJ":[0.06],"CTPZ":[0.0],"JZC":[150.39]};
+    </script>
+    """
+    allocation = parse_fund_asset_allocation_page(
+        page,
+        expected_code="515450",
+    )[0]
+    holdings = [
+        FundHolding(1, "600001", "股票一", 60.0, None, None, date(2025, 12, 31)),
+        FundHolding(2, "000002", "股票二", 39.98, None, None, date(2025, 12, 31)),
+    ]
+
+    snapshot = build_fund_holdings_snapshot(
+        holdings,
+        source="eastmoney_fund_disclosure",
+        scope="target_etf_full_disclosure",
+        allocation=allocation,
+    )
+
+    assert allocation.stock_pct == 99.99
+    assert snapshot.total_nav_weight_pct == 99.98
+    assert snapshot.equity_coverage == pytest.approx(0.9999, abs=0.0001)
+    assert snapshot.unexplained_equity_weight_pct == pytest.approx(0.01)
+
+
+def test_active_fund_full_holdings_are_measured_against_stock_allocation() -> None:
+    allocation = FundAssetAllocation(
+        report_date=date(2025, 12, 31),
+        stock_pct=79.42,
+        bond_pct=20.58,
+        cash_pct=1.24,
+        other_pct=0.0,
+        net_assets_100m_cny=29.37,
+    )
+    holdings = [
+        FundHolding(1, "600001", "股票一", 40.0, None, None, date(2025, 12, 31)),
+        FundHolding(2, "000002", "股票二", 39.41, None, None, date(2025, 12, 31)),
+    ]
+
+    snapshot = build_fund_holdings_snapshot(
+        holdings,
+        source="eastmoney_fund_disclosure",
+        scope="fund_full_disclosure",
+        allocation=allocation,
+    )
+
+    assert snapshot.total_nav_weight_pct == 79.41
+    assert snapshot.equity_coverage == pytest.approx(0.9999, abs=0.0001)
+    assert snapshot.unexplained_equity_weight_pct == pytest.approx(0.01)
+
+
+@pytest.mark.parametrize(
+    ("full_scope", "top10_scope"),
+    [
+        ("tracked_index_full_weights", "tracked_index_top10"),
+        ("target_etf_full_disclosure", "target_etf_top10"),
+        ("fund_full_disclosure", "fund_direct_top10"),
+    ],
+)
+def test_complete_holdings_snapshot_uses_explicit_top10_scope(
+    full_scope: str,
+    top10_scope: str,
+) -> None:
+    holdings = [
+        FundHolding(
+            rank=index,
+            code=f"{index:06d}",
+            name=f"Stock {index}",
+            weight_pct=float(13 - index),
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2025, 12, 31),
+        )
+        for index in range(1, 13)
+    ]
+    snapshot = build_fund_holdings_snapshot(
+        holdings,
+        source="test",
+        scope=full_scope,
+        equity_allocation_pct=100.0,
+    )
+
+    top10 = build_top10_from_snapshot(snapshot)
+
+    assert top10.scope == top10_scope
+    assert len(top10.holdings) == 10
+    assert [item.rank for item in top10.holdings] == list(range(1, 11))
+
+
+def test_top10_snapshot_rejects_unknown_complete_scope() -> None:
+    snapshot = build_fund_holdings_snapshot(
+        [
+            FundHolding(
+                rank=1,
+                code="600519",
+                name="贵州茅台",
+                weight_pct=10.0,
+                shares_10k=None,
+                market_value_10k=None,
+                report_date=date(2025, 12, 31),
+            )
+        ],
+        source="test",
+        scope="unknown_complete_scope",
+        equity_allocation_pct=100.0,
+    )
+
+    with pytest.raises(EastmoneyError, match="Cannot derive a top-ten scope"):
+        build_top10_from_snapshot(snapshot)
 
 
 def test_parse_pingzhongdata_fund_name() -> None:

@@ -15,6 +15,7 @@ from market_lens.types import (
     AssetSearchResult,
     FundHolding,
     FundHoldingsRoute,
+    FundHoldingsSnapshot,
     FundIndexDataRoute,
     FundNavPoint,
     ReitDistribution,
@@ -47,6 +48,8 @@ from market_lens.valuation.research_context import (
     build_stock_research_context,
 )
 from market_lens.valuation.routing import route_asset_model
+
+MAX_FUND_HOLDING_ANALYSES = 30
 
 
 class MarketAnalysisAgent:
@@ -182,6 +185,7 @@ class MarketAnalysisAgent:
                 holdings_route = self.data_client.get_fund_holdings_route(
                     code,
                     fund_name=fund_name,
+                    analysis_end=end,
                 )
                 holdings = holdings_route.holdings
             except EastmoneyError:
@@ -610,7 +614,10 @@ class MarketAnalysisAgent:
         holdings: list[FundHolding],
         end: date,
     ) -> dict[str, dict[str, Any]]:
-        supported = [item for item in holdings if is_supported_holding_stock(item.code)]
+        supported = sorted(
+            (item for item in holdings if is_supported_holding_stock(item.code)),
+            key=lambda item: (-(item.weight_pct or 0.0), item.rank),
+        )[:MAX_FUND_HOLDING_ANALYSES]
         if not supported:
             return {}
 
@@ -712,13 +719,13 @@ def preserve_fund_valuation_context(
 
 def official_index_valuation_notes(notes: list[str]) -> list[str]:
     obsolete = (
-        "Holding-level valuation uses the latest disclosed top holdings "
-        "and their reported weights."
+        "Holding-level valuation uses the selected audited holdings snapshot "
+        "and its reported weights."
     )
-    quality_warning = "Low top-holdings coverage or an old report date lowers confidence."
+    quality_warning = "Low analyzed equity coverage or an old report date lowers confidence."
     return [
         (
-            "Low top-holdings coverage or an old report date lowers only the separate "
+            "Low analyzed equity coverage or an old report date lowers only the separate "
             "underlying-quality confidence."
             if note == quality_warning
             else note
@@ -772,6 +779,11 @@ def serialize_holdings_route(route: FundHoldingsRoute | None) -> dict[str, Any]:
             "tracked_index_name": None,
             "target_etf_code": None,
             "target_etf_name": None,
+            "equity_allocation_pct": None,
+            "nav_equity_exposure": None,
+            "unexplained_equity_weight_pct": None,
+            "latest_top10": None,
+            "full_disclosure": None,
         }
     tracking = route.tracking
     return {
@@ -785,6 +797,28 @@ def serialize_holdings_route(route: FundHoldingsRoute | None) -> dict[str, Any]:
         "tracked_index_name": tracking.index_name if tracking else None,
         "target_etf_code": tracking.target_etf_code if tracking else None,
         "target_etf_name": tracking.target_etf_name if tracking else None,
+        "equity_allocation_pct": route.equity_allocation_pct,
+        "nav_equity_exposure": route.nav_equity_exposure,
+        "unexplained_equity_weight_pct": route.unexplained_equity_weight_pct,
+        "latest_top10": serialize_holdings_snapshot(route.latest_top10),
+        "full_disclosure": serialize_holdings_snapshot(route.full_disclosure),
+    }
+
+
+def serialize_holdings_snapshot(
+    snapshot: FundHoldingsSnapshot | None,
+) -> dict[str, Any] | None:
+    if snapshot is None:
+        return None
+    return {
+        "source": snapshot.source,
+        "scope": snapshot.scope,
+        "as_of": snapshot.as_of.isoformat(),
+        "count": len(snapshot.holdings),
+        "total_nav_weight_pct": snapshot.total_nav_weight_pct,
+        "equity_allocation_pct": snapshot.equity_allocation_pct,
+        "equity_coverage": snapshot.equity_coverage,
+        "unexplained_equity_weight_pct": snapshot.unexplained_equity_weight_pct,
     }
 
 
@@ -794,7 +828,7 @@ def apply_holdings_route_method(
 ) -> None:
     if route is None:
         return
-    if route.scope == "tracked_index_top10":
+    if route.scope in {"tracked_index_top10", "tracked_index_full_weights"}:
         valuation.update(
             {
                 "method": "index_constituents_weighted_multi_factor",
@@ -802,7 +836,7 @@ def apply_holdings_route_method(
                 "profile_name": "指数基金",
             }
         )
-    elif route.scope == "target_etf_top10":
+    elif route.scope in {"target_etf_top10", "target_etf_full_disclosure"}:
         valuation.update(
             {
                 "method": "target_etf_holdings_weighted_multi_factor",
@@ -815,6 +849,11 @@ def apply_holdings_route_method(
 def holdings_route_note(route: FundHoldingsRoute | None) -> str:
     if route is None:
         return "Fund holdings routing was unavailable; valuation confidence is limited."
+    if route.scope == "tracked_index_full_weights":
+        return (
+            "Underlying holdings use complete official monthly weights for the tracked "
+            f"CSI index, dated {route.as_of.isoformat() if route.as_of else 'unknown'}."
+        )
     if route.scope == "tracked_index_top10":
         return (
             "Valuation uses official top constituents of the tracked index, "
@@ -824,6 +863,16 @@ def holdings_route_note(route: FundHoldingsRoute | None) -> str:
         return (
             "Official index holdings were unavailable; valuation falls back to the latest "
             "disclosed top holdings of the target ETF."
+        )
+    if route.scope == "target_etf_full_disclosure":
+        return (
+            "Underlying holdings use the target ETF's latest complete annual or semiannual "
+            "stock disclosure; the latest quarterly top ten is retained separately."
+        )
+    if route.scope == "fund_full_disclosure":
+        return (
+            "Holding-level analysis uses the fund's latest complete annual or semiannual "
+            "stock disclosure and same-date equity allocation."
         )
     if route.scope == "unresolved_index_fund":
         return (

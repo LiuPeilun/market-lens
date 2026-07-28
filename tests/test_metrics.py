@@ -420,6 +420,61 @@ def test_analyze_fund_valuation_aggregates_holdings_and_confidence() -> None:
     assert result["portfolio"]["industry_weights"][0]["industry"] == "家电"
 
 
+def test_fund_holding_factor_coverage_uses_same_date_equity_allocation() -> None:
+    nav_points = [
+        FundNavPoint(
+            date=date(2026, 4, day),
+            unit_nav=1.0 + day / 100,
+            cumulative_nav=None,
+            daily_growth_pct=None,
+            subscribe_status=None,
+            redeem_status=None,
+        )
+        for day in range(1, 29)
+    ]
+    holdings = [
+        FundHolding(
+            rank=1,
+            code="000651",
+            name="格力电器",
+            weight_pct=20.0,
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2026, 3, 31),
+        ),
+        FundHolding(
+            rank=2,
+            code="000858",
+            name="五粮液",
+            weight_pct=20.0,
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2026, 3, 31),
+        ),
+    ]
+    analyses = {
+        "000651": {
+            "valuation": {
+                "pe_ttm": 8.0,
+                "pb": 2.0,
+                "pe_ttm_percentile": 0.5,
+                "pb_percentile": 0.5,
+            }
+        }
+    }
+
+    result = analyze_fund_valuation(
+        nav_points,
+        holdings=holdings,
+        holding_analyses=analyses,
+        equity_allocation_pct=80.0,
+    )
+
+    assert result["portfolio"]["metrics"]["weighted_pe_ttm"]["coverage"] == 0.25
+    assert result["holdings"]["disclosed_equity_coverage"] == 0.5
+    assert result["holdings"]["analyzed_equity_coverage"] == 0.25
+
+
 def test_analyze_index_price_proxy() -> None:
     rows = [
         StockBar(

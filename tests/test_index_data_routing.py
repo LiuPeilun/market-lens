@@ -313,6 +313,7 @@ def test_market_agent_prefers_official_index_fundamentals() -> None:
             code: str,
             *,
             fund_name: str | None,
+            analysis_end: date,
         ) -> FundHoldingsRoute:
             return holdings_route
 

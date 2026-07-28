@@ -29,8 +29,10 @@ from market_lens.types import (
     CommodityMainContractSpec,
     CsiIndexConstituentWeight,
     CsiIndexValuationPoint,
+    FundAssetAllocation,
     FundHolding,
     FundHoldingsRoute,
+    FundHoldingsSnapshot,
     FundNavPoint,
     FundProductInfo,
     FundTrackingInfo,
@@ -651,6 +653,8 @@ class EastmoneyClient:
 
     def get_fund_holdings(self, code: str, top_n: int = 10) -> list[FundHolding]:
         normalized_code = normalize_fund_code(code)
+        if top_n < 1:
+            raise ValueError("top_n must be positive")
         params = {
             "type": "jjcc",
             "code": normalized_code,
@@ -661,7 +665,102 @@ class EastmoneyClient:
         url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?" + urlencode(params)
         text = self._get_text(url, ttl_seconds=24 * 60 * 60)
         content = parse_fund_archives_content(text)
-        return parse_fund_holdings_table(content)[:top_n]
+        sections = parse_fund_holdings_sections(content, expected_code=normalized_code)
+        return sections[0][:top_n] if sections else []
+
+    def get_fund_asset_allocations(self, code: str) -> list[FundAssetAllocation]:
+        normalized_code = normalize_fund_code(code)
+        url = f"https://fundf10.eastmoney.com/zcpz_{normalized_code}.html"
+        text = self._get_text(url, ttl_seconds=24 * 60 * 60)
+        return parse_fund_asset_allocation_page(
+            text,
+            expected_code=normalized_code,
+        )
+
+    def get_fund_full_holdings_snapshot(
+        self,
+        code: str,
+        *,
+        as_of: date | None = None,
+        source: str = "eastmoney_fund_disclosure",
+        scope: str = "fund_full_disclosure",
+    ) -> FundHoldingsSnapshot | None:
+        normalized_code = normalize_fund_code(code)
+        analysis_as_of = as_of or date.today()
+        allocations = {
+            item.report_date: item
+            for item in self.get_fund_asset_allocations(normalized_code)
+            if item.report_date <= analysis_as_of
+        }
+        for report_date in fund_full_disclosure_candidates(analysis_as_of):
+            allocation = allocations.get(report_date)
+            if allocation is None or not allocation.stock_pct:
+                continue
+            params = {
+                "type": "jjcc",
+                "code": normalized_code,
+                "topline": "500",
+                "year": str(report_date.year),
+                "month": str(report_date.month),
+            }
+            url = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?" + urlencode(params)
+            try:
+                text = self._get_text(url, ttl_seconds=24 * 60 * 60)
+                sections = parse_fund_holdings_sections(
+                    parse_fund_archives_content(text),
+                    expected_code=normalized_code,
+                )
+            except EastmoneyError:
+                continue
+            holdings = next(
+                (
+                    section
+                    for section in sections
+                    if section and section[0].report_date == report_date
+                ),
+                None,
+            )
+            if holdings is None:
+                continue
+            try:
+                snapshot = build_fund_holdings_snapshot(
+                    holdings,
+                    source=source,
+                    scope=scope,
+                    allocation=allocation,
+                )
+            except EastmoneyError:
+                continue
+            if snapshot.equity_coverage >= 0.95:
+                return snapshot
+        return None
+
+    def get_fund_top10_snapshot(
+        self,
+        code: str,
+        *,
+        source: str = "eastmoney_fund_disclosure",
+        scope: str = "fund_direct_top10",
+    ) -> FundHoldingsSnapshot | None:
+        normalized_code = normalize_fund_code(code)
+        holdings = self.get_fund_holdings(normalized_code, top_n=10)
+        if not holdings or holdings[0].report_date is None:
+            return None
+        report_date = holdings[0].report_date
+        try:
+            allocations = self.get_fund_asset_allocations(normalized_code)
+        except EastmoneyError:
+            allocations = []
+        allocation = next(
+            (item for item in allocations if item.report_date == report_date),
+            None,
+        )
+        return build_fund_holdings_snapshot(
+            holdings,
+            source=source,
+            scope=scope,
+            allocation=allocation,
+        )
 
     def get_fund_tracking_info(self, code: str) -> FundTrackingInfo:
         normalized_code = normalize_fund_code(code)
@@ -995,8 +1094,10 @@ class EastmoneyClient:
         code: str,
         top_n: int = 10,
         fund_name: str | None = None,
+        analysis_end: date | None = None,
     ) -> FundHoldingsRoute:
         normalized_code = normalize_fund_code(code)
+        route_as_of = analysis_end or date.today()
         fallback_reasons: list[str] = []
         tracking: FundTrackingInfo | None = None
         try:
@@ -1016,39 +1117,85 @@ class EastmoneyClient:
             )
 
         if tracking and tracking.index_code:
+            official_top10: FundHoldingsSnapshot | None = None
+            target_top10: FundHoldingsSnapshot | None = None
             try:
-                holdings = self.get_csi_index_top_holdings(tracking.index_code, top_n=top_n)
+                weights = self.get_csi_index_full_weights(tracking.index_code)
             except (ValueError, EastmoneyError) as exc:
-                fallback_reasons.append(f"official_index_holdings_unavailable: {exc}")
+                fallback_reasons.append(f"official_index_full_weights_unavailable: {exc}")
             else:
-                if holdings:
-                    return build_fund_holdings_route(
+                if weights and weights[0].report_date <= route_as_of:
+                    full_snapshot = csi_weights_as_fund_holdings_snapshot(weights)
+                    return build_fund_holdings_route_from_snapshot(
+                        full_snapshot,
+                        tracking=tracking,
+                        fallback_reasons=fallback_reasons,
+                        latest_top10=build_top10_from_snapshot(full_snapshot),
+                        full_disclosure=full_snapshot,
+                    )
+                fallback_reasons.append("official_index_full_weights_unavailable_as_of_analysis")
+
+            try:
+                holdings = self.get_csi_index_top_holdings(
+                    tracking.index_code,
+                    top_n=top_n,
+                )
+            except (ValueError, EastmoneyError) as exc:
+                fallback_reasons.append(f"official_index_top10_unavailable: {exc}")
+            else:
+                if holdings and holdings[0].report_date and holdings[0].report_date <= route_as_of:
+                    official_top10 = build_fund_holdings_snapshot(
                         holdings,
                         source="csindex_official",
                         scope="tracked_index_top10",
-                        tracking=tracking,
-                        fallback_reasons=fallback_reasons,
+                        equity_allocation_pct=100.0,
                     )
-                fallback_reasons.append("official_index_holdings_empty")
 
             if tracking.target_etf_code:
                 try:
-                    holdings = self.get_fund_holdings(
+                    target_top10 = self.get_fund_top10_snapshot(
                         tracking.target_etf_code,
-                        top_n=top_n,
+                        source="eastmoney_fund_disclosure",
+                        scope="target_etf_top10",
                     )
                 except (ValueError, EastmoneyError) as exc:
-                    fallback_reasons.append(f"target_etf_holdings_unavailable: {exc}")
+                    fallback_reasons.append(f"target_etf_top10_unavailable: {exc}")
+                if target_top10 and target_top10.as_of > route_as_of:
+                    target_top10 = None
+                    fallback_reasons.append("target_etf_top10_after_analysis_date")
+
+                try:
+                    target_full = self.get_fund_full_holdings_snapshot(
+                        tracking.target_etf_code,
+                        as_of=route_as_of,
+                        scope="target_etf_full_disclosure",
+                    )
+                except (ValueError, EastmoneyError) as exc:
+                    fallback_reasons.append(f"target_etf_full_holdings_unavailable: {exc}")
                 else:
-                    if holdings:
-                        return build_fund_holdings_route(
-                            holdings,
-                            source="eastmoney_fund_disclosure",
-                            scope="target_etf_top10",
+                    if target_full is not None:
+                        return build_fund_holdings_route_from_snapshot(
+                            target_full,
                             tracking=tracking,
                             fallback_reasons=fallback_reasons,
+                            latest_top10=target_top10 or official_top10,
+                            full_disclosure=target_full,
                         )
-                    fallback_reasons.append("target_etf_holdings_empty")
+
+            if official_top10 is not None:
+                return build_fund_holdings_route_from_snapshot(
+                    official_top10,
+                    tracking=tracking,
+                    fallback_reasons=fallback_reasons,
+                    latest_top10=official_top10,
+                )
+            if target_top10 is not None:
+                return build_fund_holdings_route_from_snapshot(
+                    target_top10,
+                    tracking=tracking,
+                    fallback_reasons=fallback_reasons,
+                    latest_top10=target_top10,
+                )
 
             if looks_like_feeder_fund(resolved_name):
                 fallback_reasons.append("feeder_fund_target_etf_holdings_unresolved")
@@ -1060,11 +1207,43 @@ class EastmoneyClient:
                     fallback_reasons=fallback_reasons,
                 )
 
-        holdings = self.get_fund_holdings(normalized_code, top_n=top_n)
+        try:
+            direct_top10 = self.get_fund_top10_snapshot(normalized_code)
+        except (ValueError, EastmoneyError) as exc:
+            fallback_reasons.append(f"fund_direct_top10_unavailable: {exc}")
+            direct_top10 = None
+        if direct_top10 and direct_top10.as_of > route_as_of:
+            direct_top10 = None
+            fallback_reasons.append("fund_direct_top10_after_analysis_date")
+
+        try:
+            direct_full = self.get_fund_full_holdings_snapshot(
+                normalized_code,
+                as_of=route_as_of,
+            )
+        except (ValueError, EastmoneyError) as exc:
+            fallback_reasons.append(f"fund_full_holdings_unavailable: {exc}")
+        else:
+            if direct_full is not None:
+                return build_fund_holdings_route_from_snapshot(
+                    direct_full,
+                    tracking=tracking,
+                    fallback_reasons=fallback_reasons,
+                    latest_top10=direct_top10,
+                    full_disclosure=direct_full,
+                )
+
+        if direct_top10 is not None:
+            return build_fund_holdings_route_from_snapshot(
+                direct_top10,
+                tracking=tracking,
+                fallback_reasons=fallback_reasons,
+                latest_top10=direct_top10,
+            )
         return build_fund_holdings_route(
-            holdings,
-            source="eastmoney_fund_disclosure",
-            scope="fund_direct_top10",
+            [],
+            source="unavailable",
+            scope="fund_holdings_unavailable",
             tracking=tracking,
             fallback_reasons=fallback_reasons,
         )
@@ -3120,6 +3299,150 @@ def build_fund_holdings_route(
     )
 
 
+def build_fund_holdings_route_from_snapshot(
+    snapshot: FundHoldingsSnapshot,
+    *,
+    tracking: FundTrackingInfo | None,
+    fallback_reasons: list[str],
+    latest_top10: FundHoldingsSnapshot | None = None,
+    full_disclosure: FundHoldingsSnapshot | None = None,
+) -> FundHoldingsRoute:
+    return FundHoldingsRoute(
+        holdings=snapshot.holdings,
+        source=snapshot.source,
+        scope=snapshot.scope,
+        as_of=snapshot.as_of,
+        coverage=round(snapshot.equity_coverage, 4),
+        tracking=tracking,
+        fallback_reasons=tuple(fallback_reasons),
+        equity_allocation_pct=snapshot.equity_allocation_pct,
+        nav_equity_exposure=(
+            round(snapshot.equity_allocation_pct / 100.0, 4)
+            if snapshot.equity_allocation_pct is not None
+            else None
+        ),
+        unexplained_equity_weight_pct=snapshot.unexplained_equity_weight_pct,
+        latest_top10=latest_top10,
+        full_disclosure=full_disclosure,
+    )
+
+
+def build_fund_holdings_snapshot(
+    holdings: list[FundHolding],
+    *,
+    source: str,
+    scope: str,
+    allocation: FundAssetAllocation | None = None,
+    equity_allocation_pct: float | None = None,
+) -> FundHoldingsSnapshot:
+    positive_holdings = [
+        item
+        for item in holdings
+        if item.weight_pct is not None
+        and isfinite(item.weight_pct)
+        and item.weight_pct > 0
+    ]
+    if not positive_holdings:
+        raise EastmoneyError(f"Fund holdings snapshot '{scope}' contains no positive weights")
+    report_dates = {item.report_date for item in positive_holdings}
+    if None in report_dates or len(report_dates) != 1:
+        raise EastmoneyError(f"Fund holdings snapshot '{scope}' mixes report dates")
+    report_date = next(iter(report_dates))
+    if report_date is None:
+        raise EastmoneyError(f"Fund holdings snapshot '{scope}' has no report date")
+    if allocation is not None and allocation.report_date != report_date:
+        raise EastmoneyError(f"Fund holdings allocation date mismatch for {report_date}")
+
+    stock_pct = allocation.stock_pct if allocation is not None else equity_allocation_pct
+    total_weight_pct = sum(item.weight_pct or 0.0 for item in positive_holdings)
+    if stock_pct is not None:
+        if not isfinite(stock_pct) or stock_pct <= 0:
+            raise EastmoneyError(f"Invalid equity allocation for fund holdings on {report_date}")
+        if total_weight_pct > stock_pct + 2.0:
+            raise EastmoneyError(
+                f"Fund holdings exceed same-date equity allocation on {report_date}: "
+                f"{total_weight_pct:.2f}% > {stock_pct:.2f}%"
+            )
+        equity_coverage = min(total_weight_pct / stock_pct, 1.0)
+        unexplained_weight = max(stock_pct - total_weight_pct, 0.0)
+    else:
+        equity_coverage = min(total_weight_pct / 100.0, 1.0)
+        unexplained_weight = None
+    return FundHoldingsSnapshot(
+        holdings=positive_holdings,
+        source=source,
+        scope=scope,
+        as_of=report_date,
+        total_nav_weight_pct=round(total_weight_pct, 4),
+        equity_allocation_pct=stock_pct,
+        equity_coverage=round(equity_coverage, 6),
+        unexplained_equity_weight_pct=(
+            round(unexplained_weight, 4) if unexplained_weight is not None else None
+        ),
+    )
+
+
+def build_top10_from_snapshot(snapshot: FundHoldingsSnapshot) -> FundHoldingsSnapshot:
+    top10_scope = {
+        "tracked_index_full_weights": "tracked_index_top10",
+        "target_etf_full_disclosure": "target_etf_top10",
+        "fund_full_disclosure": "fund_direct_top10",
+    }.get(snapshot.scope)
+    if top10_scope is None:
+        raise EastmoneyError(
+            f"Cannot derive a top-ten scope from holdings snapshot '{snapshot.scope}'"
+        )
+    holdings = sorted(
+        snapshot.holdings,
+        key=lambda item: (-(item.weight_pct or 0.0), item.code),
+    )[:10]
+    holdings = [replace(item, rank=index) for index, item in enumerate(holdings, start=1)]
+    return build_fund_holdings_snapshot(
+        holdings,
+        source=snapshot.source,
+        scope=top10_scope,
+        equity_allocation_pct=snapshot.equity_allocation_pct,
+    )
+
+
+def csi_weights_as_fund_holdings_snapshot(
+    weights: list[CsiIndexConstituentWeight],
+) -> FundHoldingsSnapshot:
+    if not weights:
+        raise EastmoneyError("CSI index full weights are empty")
+    ordered = sorted(weights, key=lambda item: (-item.weight_pct, item.security_code))
+    holdings = [
+        FundHolding(
+            rank=rank,
+            code=item.security_code,
+            name=item.security_name,
+            weight_pct=item.weight_pct,
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=item.report_date,
+        )
+        for rank, item in enumerate(ordered, start=1)
+    ]
+    return build_fund_holdings_snapshot(
+        holdings,
+        source="csindex_official",
+        scope="tracked_index_full_weights",
+        equity_allocation_pct=100.0,
+    )
+
+
+def fund_full_disclosure_candidates(as_of: date) -> list[date]:
+    candidates = [
+        date(year, month, 30 if month == 6 else 31)
+        for year in range(as_of.year, as_of.year - 3, -1)
+        for month in (12, 6)
+    ]
+    return sorted(
+        (candidate for candidate in candidates if candidate <= as_of),
+        reverse=True,
+    )
+
+
 def parse_fund_archives_content(text: str) -> str:
     match = re.search(
         r"var\s+apidata\s*=\s*\{\s*content:\"(.*)\",arryear:",
@@ -3136,29 +3459,142 @@ def parse_fund_archives_content(text: str) -> str:
     return unescape(content)
 
 
-def parse_fund_holdings_table(content: str) -> list[FundHolding]:
-    parser = FundHoldingsHTMLParser.parse(content)
-    report_date_match = re.search(r"截止至：\s*(\d{4}-\d{2}-\d{2})", parser.text)
-    report_date = parse_optional_date(report_date_match.group(1)) if report_date_match else None
+def parse_fund_holdings_sections(
+    content: str,
+    *,
+    expected_code: str | None = None,
+) -> list[list[FundHolding]]:
+    normalized_expected = normalize_fund_code(expected_code) if expected_code else None
+    raw_sections = [
+        section
+        for section in re.split(r"(?=<div\s+class=['\"]box['\"]>)", content)
+        if re.search(r"\d{4}-\d{2}-\d{2}", section)
+    ]
+    if not raw_sections and re.search(r"\d{4}-\d{2}-\d{2}", content):
+        raw_sections = [content]
+    sections: list[list[FundHolding]] = []
+    for raw_section in raw_sections:
+        if normalized_expected:
+            fund_codes = set(
+                re.findall(r"fund\.eastmoney\.com/(\d{6})\.html", raw_section)
+            )
+            if fund_codes != {normalized_expected}:
+                raise EastmoneyError(
+                    f"Eastmoney fund holdings identity mismatch for {normalized_expected}"
+                )
+        parser = FundHoldingsHTMLParser.parse(raw_section)
+        report_date_match = re.search(
+            r"(?:截止至|鎴鑷?)[：:]\s*(\d{4}-\d{2}-\d{2})",
+            parser.text,
+        )
+        if report_date_match is None:
+            report_date_match = re.search(r"(\d{4}-\d{2}-\d{2})", parser.text)
+        if report_date_match is None:
+            continue
+        report_date = parse_date(report_date_match.group(1))
+        holdings = parse_fund_holding_rows(parser.rows, report_date=report_date)
+        if holdings:
+            sections.append(holdings)
+    return sorted(
+        sections,
+        key=lambda items: items[0].report_date or date.min,
+        reverse=True,
+    )
+
+
+def parse_fund_holding_rows(
+    rows: list[list[str]],
+    *,
+    report_date: date,
+) -> list[FundHolding]:
     holdings: list[FundHolding] = []
-    for cells in parser.rows:
-        if len(cells) < 9 or not cells[0].isdigit():
+    identities: set[str] = set()
+    for cells in rows:
+        if len(cells) < 7 or not cells[0].isdigit():
             continue
         code = re.sub(r"\D", "", cells[1])
         if not code:
             continue
+        if code in identities:
+            raise EastmoneyError(f"Duplicate fund holding {code} on {report_date}")
+        identities.add(code)
+        weight_index, shares_index, value_index = (6, 7, 8) if len(cells) >= 9 else (4, 5, 6)
         holdings.append(
             FundHolding(
                 rank=int(cells[0]),
                 code=code,
                 name=repair_mojibake(cells[2]) or cells[2],
-                weight_pct=to_float(cells[6]),
-                shares_10k=to_float(cells[7]),
-                market_value_10k=to_float(cells[8]),
+                weight_pct=to_float(cells[weight_index]),
+                shares_10k=to_float(cells[shares_index]),
+                market_value_10k=to_float(cells[value_index]),
                 report_date=report_date,
             )
         )
     return sorted(holdings, key=lambda item: item.rank)
+
+
+def parse_fund_holdings_table(content: str) -> list[FundHolding]:
+    sections = parse_fund_holdings_sections(content)
+    return sections[0] if sections else []
+
+
+def parse_fund_asset_allocation_page(
+    text: str,
+    *,
+    expected_code: str,
+) -> list[FundAssetAllocation]:
+    normalized_code = normalize_fund_code(expected_code)
+    if (
+        f"({normalized_code})" not in text
+        and f"/{normalized_code}.html" not in text
+        and f"_{normalized_code}.html" not in text
+    ):
+        raise EastmoneyError(
+            f"Eastmoney fund asset allocation identity mismatch for {normalized_code}"
+        )
+    match = re.search(r"var\s+chartData\s*=\s*(\{.*?\})\s*;", text, re.S)
+    if match is None:
+        raise EastmoneyError("Unexpected Eastmoney fund asset allocation response")
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise EastmoneyError("Invalid Eastmoney fund asset allocation payload") from exc
+
+    keys = ("Dates", "GP", "ZQ", "XJ", "CTPZ", "JZC")
+    values = [payload.get(key) for key in keys]
+    if any(not isinstance(items, list) for items in values):
+        raise EastmoneyError("Invalid Eastmoney fund asset allocation schema")
+    lengths = {len(items) for items in values if isinstance(items, list)}
+    if len(lengths) != 1:
+        raise EastmoneyError("Mismatched Eastmoney fund asset allocation arrays")
+
+    allocations: list[FundAssetAllocation] = []
+    seen_dates: set[date] = set()
+    for index, raw_date in enumerate(payload["Dates"]):
+        report_date = parse_date(str(raw_date))
+        if report_date in seen_dates:
+            raise EastmoneyError(f"Duplicate fund asset allocation date: {report_date}")
+        seen_dates.add(report_date)
+        numeric = {
+            key: to_float(payload[key][index])
+            for key in ("GP", "ZQ", "XJ", "CTPZ", "JZC")
+        }
+        if any(
+            value is not None and (not isfinite(value) or value < 0)
+            for value in numeric.values()
+        ):
+            raise EastmoneyError(f"Invalid fund asset allocation value on {report_date}")
+        allocations.append(
+            FundAssetAllocation(
+                report_date=report_date,
+                stock_pct=numeric["GP"],
+                bond_pct=numeric["ZQ"],
+                cash_pct=numeric["XJ"],
+                other_pct=numeric["CTPZ"],
+                net_assets_100m_cny=numeric["JZC"],
+            )
+        )
+    return sorted(allocations, key=lambda item: item.report_date)
 
 
 def parse_fund_nav_table(content: str) -> list[FundNavPoint]:
