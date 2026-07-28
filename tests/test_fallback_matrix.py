@@ -200,6 +200,8 @@ def test_fallback_matrix_definitions_are_ordered_and_bounded() -> None:
         assert len(step_keys) == len(set(step_keys))
         assert all(step.timeout_budget_seconds > 0 for step in matrix.steps)
         assert all(step.source for step in matrix.steps)
+        assert all(step.admission_condition for step in matrix.steps)
+        assert all(step.output_method for step in matrix.steps)
         assert all(step.stop_condition for step in matrix.steps)
 
 
@@ -223,6 +225,9 @@ def test_fallback_trace_serializes_stable_reason_codes() -> None:
     serialized = result["fallback_matrices"]["stock"]
     assert serialized["terminal_reason"] == "fallback_complete"
     assert serialized["selected_step"] == "stock_price_history"
+    assert serialized["selected_method"] == "stock_price_history"
+    assert serialized["steps"][0]["admission_condition"]
+    assert serialized["steps"][0]["output_method"] == "fundamental_valuation"
     assert serialized["steps"][0]["reason"] == "stock_source_disconnected"
     assert result["assessment"]["data_quality"]["fallback_matrices"] == (
         result["fallback_matrices"]
