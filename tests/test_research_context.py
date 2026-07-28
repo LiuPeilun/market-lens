@@ -319,7 +319,12 @@ def test_agent_reit_path_is_research_only_and_isolates_source_failures() -> None
         ANALYSIS_AS_OF,
     )
 
-    assert "assessment" not in result
+    assert result["assessment"]["status"] == "unavailable"
+    assert result["assessment"]["method"] == "unavailable"
+    assert (
+        "reit_production_model_unavailable"
+        in result["assessment"]["fallback_reasons"]
+    )
     assert result["valuation"]["score"] is None
     assert result["valuation"]["method"] == "reit_basic_research_only"
     assert result["research"]["route"]["asset_type"] == "reit"

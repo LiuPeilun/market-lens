@@ -147,6 +147,7 @@ def build_stock_assessment(
     )
     return build_assessment(
         profile=model.key,
+        method="fundamental_valuation",
         analysis_as_of=analysis_as_of,
         dimensions=dimensions,
         confidence_detail=confidence_detail,
@@ -549,8 +550,16 @@ def build_fund_assessment(
             "product": product_confidence,
         }
     )
+    method, degraded, fallback_reasons = resolve_fund_assessment_contract(
+        valuation,
+        holdings_route,
+        index_data_route,
+    )
     return build_assessment(
         profile=product_profile,
+        method=method,
+        degraded=degraded,
+        fallback_reasons=fallback_reasons,
         analysis_as_of=analysis_as_of,
         dimensions=dimensions,
         confidence_detail=confidence_detail,
@@ -776,6 +785,7 @@ def combine_named_confidence(
 def build_assessment(
     *,
     profile: str,
+    method: str,
     analysis_as_of: date | None,
     dimensions: dict[str, dict[str, Any] | None],
     confidence_detail: dict[str, Any],
@@ -784,11 +794,26 @@ def build_assessment(
     source_as_of: date | None,
     retrieved_at: datetime,
     routing: dict[str, Any] | None = None,
+    degraded: bool = False,
+    fallback_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
+    valuation_dimension = dimensions.get("valuation") or {}
+    valuation_score = to_finite_float(valuation_dimension.get("score"))
+    status = (
+        "unavailable"
+        if valuation_score is None
+        else "degraded"
+        if degraded
+        else "complete"
+    )
+    resolved_method = method if valuation_score is not None else "unavailable"
     result = {
         "schema_version": SCHEMA_VERSION,
         "model_version": MODEL_VERSION,
         "profile": profile,
+        "status": status,
+        "method": resolved_method,
+        "fallback_reasons": list(dict.fromkeys(fallback_reasons or [])),
         "analysis_as_of": analysis_as_of.isoformat() if analysis_as_of else None,
         "dimensions": dimensions,
         "overall_confidence": conservative_overall_confidence(dimensions),
@@ -804,6 +829,123 @@ def build_assessment(
     if routing is not None:
         result["routing"] = routing
     return result
+
+
+def resolve_fund_assessment_contract(
+    valuation: dict[str, Any],
+    holdings_route: dict[str, Any],
+    index_data_route: dict[str, Any],
+) -> tuple[str, bool, list[str]]:
+    valuation_status = str(valuation.get("status") or "")
+    score = to_finite_float(valuation.get("score"))
+    route_scope = str(holdings_route.get("scope") or "unavailable")
+    reasons = stable_fallback_reason_codes(
+        [
+            *(holdings_route.get("fallback_reasons") or []),
+            *(index_data_route.get("fallback_reasons") or []),
+        ]
+    )
+
+    if valuation_status == "official_index_fundamental_valuation" and score is not None:
+        return "index_fundamental_valuation", bool(reasons), reasons
+
+    if valuation_status == "proxy_valuation" and score is not None:
+        return (
+            "price_position_proxy",
+            True,
+            list(dict.fromkeys(["primary_valuation_unavailable", *reasons])),
+        )
+
+    if score is not None:
+        if route_scope in {
+            "tracked_index_top10",
+            "target_etf_top10",
+            "fund_direct_top10",
+        }:
+            reasons = list(dict.fromkeys(["limited_holdings_snapshot", *reasons]))
+        return "holdings_valuation", bool(reasons), reasons
+
+    missing_reasons = [
+        f"missing_factor:{key}"
+        for key in valuation.get("missing_factors") or []
+        if key
+    ]
+    return (
+        "unavailable",
+        False,
+        list(
+            dict.fromkeys(
+                [
+                    "valuation_score_unavailable",
+                    *reasons,
+                    *missing_reasons,
+                ]
+            )
+        ),
+    )
+
+
+def stable_fallback_reason_codes(reasons: list[Any]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            str(reason).split(":", 1)[0].strip()
+            for reason in reasons
+            if str(reason).strip()
+        )
+    )
+
+
+def build_unavailable_assessment(
+    *,
+    profile: str,
+    analysis_as_of: date | None,
+    retrieved_at: datetime,
+    source_as_of: date | None = None,
+    sources: list[dict[str, Any]] | None = None,
+    warnings: list[str] | None = None,
+    fallback_reasons: list[str] | None = None,
+    routing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    unavailable_dimension = {
+        "model": f"{profile}_valuation_unavailable",
+        "score": None,
+        "level": "unknown",
+        "level_zh": "暂不可评估",
+        "confidence": 0.0,
+        "factors": [],
+        "weight_coverage": 0.0,
+        "data_coverage": 0.0,
+        "sample_adequacy": 0.0,
+        "warnings": list(dict.fromkeys(warnings or [])),
+    }
+    quality_dimension = {
+        **unavailable_dimension,
+        "model": f"{profile}_quality_unavailable",
+        "level_zh": "未知",
+    }
+    return build_assessment(
+        profile=profile,
+        method="unavailable",
+        analysis_as_of=analysis_as_of,
+        dimensions={
+            "valuation": unavailable_dimension,
+            "quality": quality_dimension,
+            "product": None,
+        },
+        confidence_detail={
+            "score": 0.0,
+            "components": {},
+            "caps": [],
+            "reasons": list(dict.fromkeys(fallback_reasons or [])),
+            "dimensions": {},
+        },
+        sources=sources or [],
+        warnings=list(dict.fromkeys(warnings or [])),
+        source_as_of=source_as_of,
+        retrieved_at=retrieved_at,
+        routing=routing,
+        fallback_reasons=fallback_reasons,
+    )
 
 
 def standardize_legacy_factors(

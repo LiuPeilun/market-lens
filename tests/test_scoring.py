@@ -243,6 +243,9 @@ def test_stock_analysis_exposes_v2_assessment_and_legacy_fields() -> None:
     assessment = result["assessment"]
     assert assessment["schema_version"] == SCHEMA_VERSION
     assert assessment["model_version"] == MODEL_VERSION
+    assert assessment["status"] == "complete"
+    assert assessment["method"] == "fundamental_valuation"
+    assert assessment["fallback_reasons"] == []
     assert assessment["dimensions"]["valuation"]["score"] == 100.0
     assert assessment["dimensions"]["valuation"]["sample_adequacy"] == 0.1575
     assert assessment["dimensions"]["valuation"]["confidence"] < 1.0
@@ -278,6 +281,9 @@ def test_fund_analysis_exposes_pending_assessment_with_model_weights() -> None:
 
     assessment = result["assessment"]
     valuation = assessment["dimensions"]["valuation"]
+    assert assessment["status"] == "unavailable"
+    assert assessment["method"] == "unavailable"
+    assert "valuation_score_unavailable" in assessment["fallback_reasons"]
     assert valuation["score"] is None
     assert valuation["confidence"] == 0.0
     assert assessment["dimensions"]["quality"]["score"] is None
@@ -344,8 +350,62 @@ def test_index_proxy_assessment_standardizes_factors_and_applies_cap() -> None:
     assert dimension["confidence"] <= 0.55
     assert dimension["factors"][0]["normalization"] == "legacy_valuation_rule"
     assert dimension["factors"][0]["source"] == "tracked_index_price_history"
+    assert assessment["status"] == "degraded"
+    assert assessment["method"] == "price_position_proxy"
+    assert "primary_valuation_unavailable" in assessment["fallback_reasons"]
     assert assessment["confidence_detail"]["score"] <= 0.6
     assert assessment["attractiveness"] is None
+
+
+def test_top10_holdings_assessment_has_stable_degraded_contract() -> None:
+    result = {
+        "asset_type": "fund",
+        "as_of": "2026-07-20",
+        "data_source": "fund_nav_history",
+        "valuation": {
+            "profile": "balanced",
+            "status": "holdings_valuation",
+            "score": 40.0,
+            "confidence": 0.35,
+            "factor_coverage": 0.5,
+            "holding_factor_coverage": 0.25,
+            "factors": [
+                {
+                    "key": "pe_ttm_percentile",
+                    "name": "PE percentile",
+                    "weight": 1.0,
+                    "value": 0.4,
+                    "score": 40.0,
+                }
+            ],
+            "missing_factors": [],
+            "holdings": {"report_date": "2026-06-30"},
+            "holdings_route": {
+                "source": "eastmoney_fund_disclosure",
+                "scope": "fund_direct_top10",
+                "coverage": 0.25,
+                "fallback_reasons": [
+                    "fund_full_holdings_unavailable: upstream disconnected"
+                ],
+            },
+            "product_data": {
+                "profile": "active_fund",
+                "diagnostic": {"status": "unavailable"},
+            },
+        },
+    }
+
+    assessment = build_fund_assessment(
+        result,
+        retrieved_at=datetime(2026, 7, 21, tzinfo=UTC),
+    )
+
+    assert assessment["status"] == "degraded"
+    assert assessment["method"] == "holdings_valuation"
+    assert assessment["fallback_reasons"] == [
+        "limited_holdings_snapshot",
+        "fund_full_holdings_unavailable",
+    ]
 
 
 @pytest.mark.parametrize(

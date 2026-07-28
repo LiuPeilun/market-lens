@@ -28,7 +28,10 @@ from market_lens.types import (
     StockValuationPoint,
 )
 from market_lens.valuation.analyzer import analyze_fund, analyze_stock
-from market_lens.valuation.assessment import build_fund_assessment
+from market_lens.valuation.assessment import (
+    build_fund_assessment,
+    build_unavailable_assessment,
+)
 from market_lens.valuation.framework import analyze_index_price_proxy
 from market_lens.valuation.index_data import (
     analyze_csi_index_valuation,
@@ -444,7 +447,7 @@ class MarketAnalysisAgent:
         )
         analysis_date = latest_price.date if latest_price else end
         drawdown = max_drawdown(price_values)
-        return {
+        result = {
             "asset_type": "fund",
             "code": profile.fund_code,
             "name": profile.fund_name,
@@ -493,6 +496,44 @@ class MarketAnalysisAgent:
                 "This is a research summary, not investment advice.",
             ],
         }
+        fallback_reasons = [
+            "reit_production_model_unavailable",
+            *(f"source_error:{key}" for key in sorted(errors)),
+        ]
+        result["assessment"] = build_unavailable_assessment(
+            profile="reit_basic",
+            analysis_as_of=analysis_date,
+            retrieved_at=retrieved_at,
+            source_as_of=latest_price.date if latest_price else None,
+            sources=[
+                {
+                    "key": key,
+                    "source": "eastmoney_reit_data",
+                    "status": (
+                        "error"
+                        if key in errors
+                        else "available"
+                        if loaded[key]
+                        else "unavailable"
+                    ),
+                    "source_as_of": (
+                        latest_price.date.isoformat()
+                        if key == "exchange_price" and latest_price
+                        else None
+                    ),
+                    "retrieved_at": retrieved_at.isoformat(),
+                    "reason": errors.get(key),
+                }
+                for key in loaders
+            ],
+            warnings=[
+                "REIT production valuation model is not available.",
+                *(f"{key}: {message}" for key, message in sorted(errors.items())),
+            ],
+            fallback_reasons=fallback_reasons,
+            routing=research.get("route"),
+        )
+        return result
 
     def _load_fund_index_data_route(
         self,

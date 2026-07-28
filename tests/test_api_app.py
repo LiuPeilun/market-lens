@@ -60,6 +60,8 @@ def test_api_contract_accepts_v2_assessment_in_analysis_and_stream_meta() -> Non
     )
 
     assert response.result.assessment is not None
+    assert response.result.assessment.status == "complete"
+    assert response.result.assessment.method == "fundamental_valuation"
     assert response.result.assessment.dimensions.quality.score == 72.0
     assert chat_response.analysis is not None
     assert chat_response.analysis.assessment is not None
@@ -135,6 +137,9 @@ def analysis_result_payload(*, include_assessment: bool) -> dict:
             "schema_version": "2",
             "model_version": "valuation-v2.2.0-fund-product-models",
             "profile": "generic_non_financial",
+            "status": "complete",
+            "method": "fundamental_valuation",
+            "fallback_reasons": [],
             "analysis_as_of": "2026-07-21",
             "dimensions": {
                 "valuation": dimension,

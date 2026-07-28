@@ -60,6 +60,16 @@ class ValuationAssessment(FlexibleResponseModel):
     schema_version: str
     model_version: str
     profile: str
+    status: Literal["complete", "degraded", "unavailable"] | None = None
+    method: Literal[
+        "fundamental_valuation",
+        "index_fundamental_valuation",
+        "holdings_valuation",
+        "price_position_proxy",
+        "last_known_good",
+        "unavailable",
+    ] | None = None
+    fallback_reasons: list[str] = Field(default_factory=list)
     analysis_as_of: date | None = None
     dimensions: AssessmentDimensions
     overall_confidence: float = 0.0

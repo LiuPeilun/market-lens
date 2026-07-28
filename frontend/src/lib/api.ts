@@ -190,6 +190,16 @@ export interface ValuationAssessment {
   schema_version: string
   model_version: string
   profile: string
+  status?: 'complete' | 'degraded' | 'unavailable' | null
+  method?:
+    | 'fundamental_valuation'
+    | 'index_fundamental_valuation'
+    | 'holdings_valuation'
+    | 'price_position_proxy'
+    | 'last_known_good'
+    | 'unavailable'
+    | null
+  fallback_reasons?: string[]
   analysis_as_of: string | null
   dimensions: {
     valuation: AssessmentDimension
