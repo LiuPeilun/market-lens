@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import base64
-import tempfile
+import os
+import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic, sleep
 from typing import Any
+from uuid import uuid4
 
 import docker
 from docker.errors import DockerException, ImageNotFound
@@ -95,15 +99,11 @@ class DockerSandboxRunner(SandboxRunner):
                 )
 
             self.config.temp_root.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(
-                prefix="market-lens-",
-                dir=self.config.temp_root,
-            ) as temp_dir:
-                temp_path = Path(temp_dir)
+            with _temporary_workspace(self.config.temp_root) as temp_path:
                 input_dir = temp_path / "input"
                 output_dir = temp_path / "output"
-                input_dir.mkdir()
-                output_dir.mkdir()
+                _mkdir_private(input_dir)
+                _mkdir_private(output_dir)
                 _write_input_files(input_dir, request)
 
                 container = client.containers.run(
@@ -231,6 +231,21 @@ class DockerSandboxRunner(SandboxRunner):
 
 class SandboxArtifactError(ValueError):
     pass
+
+
+@contextmanager
+def _temporary_workspace(temp_root: Path) -> Iterator[Path]:
+    temp_path = temp_root / f"market-lens-{uuid4().hex}"
+    _mkdir_private(temp_path)
+    try:
+        yield temp_path
+    finally:
+        shutil.rmtree(temp_path, ignore_errors=True)
+
+
+def _mkdir_private(path: Path) -> None:
+    mode = 0o777 if os.name == "nt" else 0o700
+    path.mkdir(mode=mode)
 
 
 def _write_input_files(input_dir: Path, request: SandboxRequest) -> None:

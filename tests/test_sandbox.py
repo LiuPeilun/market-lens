@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import shutil
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from docker.errors import ImageNotFound
@@ -117,6 +120,16 @@ def make_request(**overrides: Any) -> SandboxRequest:
     return SandboxRequest(**data)
 
 
+@pytest.fixture
+def sandbox_temp_root() -> Iterator[Path]:
+    root = Path(".tmp") / "sandbox-tests" / uuid4().hex
+    root.mkdir(parents=True)
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -162,9 +175,9 @@ def test_disabled_and_daytona_runners_are_unavailable() -> None:
     assert daytona.error_code == "daytona_not_configured"
 
 
-def test_docker_runner_requires_explicit_enablement(tmp_path: Path) -> None:
+def test_docker_runner_requires_explicit_enablement(sandbox_temp_root: Path) -> None:
     runner = DockerSandboxRunner(
-        DockerSandboxConfig(temp_root=tmp_path, enabled=False),
+        DockerSandboxConfig(temp_root=sandbox_temp_root, enabled=False),
         client=FakeDockerClient(),
     )
 
@@ -174,9 +187,13 @@ def test_docker_runner_requires_explicit_enablement(tmp_path: Path) -> None:
     assert result.error_code == "docker_sandbox_disabled"
 
 
-def test_docker_runner_does_not_pull_missing_images(tmp_path: Path) -> None:
+def test_docker_runner_does_not_pull_missing_images(sandbox_temp_root: Path) -> None:
     runner = DockerSandboxRunner(
-        DockerSandboxConfig(image="missing:test", temp_root=tmp_path, enabled=True),
+        DockerSandboxConfig(
+            image="missing:test",
+            temp_root=sandbox_temp_root,
+            enabled=True,
+        ),
         client=FakeDockerClient(image_exists=False),
     )
 
@@ -186,10 +203,16 @@ def test_docker_runner_does_not_pull_missing_images(tmp_path: Path) -> None:
     assert result.error_code == "sandbox_image_missing"
 
 
-def test_docker_runner_applies_security_and_resource_limits(tmp_path: Path) -> None:
+def test_docker_runner_applies_security_and_resource_limits(
+    sandbox_temp_root: Path,
+) -> None:
     client = FakeDockerClient()
     runner = DockerSandboxRunner(
-        DockerSandboxConfig(image="python:test", temp_root=tmp_path, enabled=True),
+        DockerSandboxConfig(
+            image="python:test",
+            temp_root=sandbox_temp_root,
+            enabled=True,
+        ),
         client=client,
     )
 
@@ -216,11 +239,11 @@ def test_docker_runner_applies_security_and_resource_limits(tmp_path: Path) -> N
     assert client.containers.container.removed is True
 
 
-def test_docker_runner_enforces_timeout(tmp_path: Path) -> None:
+def test_docker_runner_enforces_timeout(sandbox_temp_root: Path) -> None:
     container = FakeContainer(running=True)
     runner = DockerSandboxRunner(
         DockerSandboxConfig(
-            temp_root=tmp_path,
+            temp_root=sandbox_temp_root,
             enabled=True,
             poll_interval_seconds=0.001,
         ),
@@ -237,10 +260,10 @@ def test_docker_runner_enforces_timeout(tmp_path: Path) -> None:
     assert container.killed is True
 
 
-def test_docker_runner_limits_combined_output(tmp_path: Path) -> None:
+def test_docker_runner_limits_combined_output(sandbox_temp_root: Path) -> None:
     container = FakeContainer(stdout=b"a" * 800, stderr=b"b" * 800)
     runner = DockerSandboxRunner(
-        DockerSandboxConfig(temp_root=tmp_path, enabled=True),
+        DockerSandboxConfig(temp_root=sandbox_temp_root, enabled=True),
         client=FakeDockerClient(container=container),
     )
 
@@ -252,10 +275,10 @@ def test_docker_runner_limits_combined_output(tmp_path: Path) -> None:
     assert len(result.stdout.encode()) + len(result.stderr.encode()) == 1024
 
 
-def test_docker_runner_collects_requested_artifacts(tmp_path: Path) -> None:
+def test_docker_runner_collects_requested_artifacts(sandbox_temp_root: Path) -> None:
     content = b"artifact contents"
     runner = DockerSandboxRunner(
-        DockerSandboxConfig(temp_root=tmp_path, enabled=True),
+        DockerSandboxConfig(temp_root=sandbox_temp_root, enabled=True),
         client=FakeDockerClient(artifact_content=content),
     )
 
@@ -266,10 +289,10 @@ def test_docker_runner_collects_requested_artifacts(tmp_path: Path) -> None:
     assert base64.b64decode(result.artifacts[0].content_base64) == content
 
 
-def test_run_python_uses_a_fixed_workspace_script(tmp_path: Path) -> None:
+def test_run_python_uses_a_fixed_workspace_script(sandbox_temp_root: Path) -> None:
     client = FakeDockerClient()
     runner = DockerSandboxRunner(
-        DockerSandboxConfig(temp_root=tmp_path, enabled=True),
+        DockerSandboxConfig(temp_root=sandbox_temp_root, enabled=True),
         client=client,
     )
 
