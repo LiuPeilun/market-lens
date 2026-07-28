@@ -120,6 +120,63 @@ validator version, and request identity are exposed in
 `assessment.data_quality`. If no numeric score exists, the assessment remains
 `unavailable`.
 
+## Deterministic Fallback Matrices
+
+Fallback routing is implemented in `market_lens/valuation/fallback_matrix.py`
+and versioned as `fallback-matrix-v1`. The LLM cannot select, reorder, or skip
+these routes. Each analysis exposes the executed trace both at
+`fallback_matrices` and `assessment.data_quality.fallback_matrices`.
+
+Every trace contains the declared source, admission and stop condition, timeout
+budget, output method, observed status, stable reason code, selected step, and
+terminal reason. The timeout values are route budgets for orchestration and
+observability; enforcement of independent stage deadlines remains part of
+ST-10.
+
+### Stock Matrix
+
+| Order | Step | Source | Admission and stop condition | Budget | Output |
+| ---: | --- | --- | --- | ---: | --- |
+| 1 | `stock_valuation_history` | Eastmoney valuation history or exact validated LKG | Verified factors pass the existing scoring gates | 45s | `fundamental_valuation` |
+| 2 | `stock_price_history` | Eastmoney adjusted history or exact validated LKG | Verified rows cover the requested interval | 45s | Performance history |
+| 3 | `valuation_price_projection` | Positive dated closes already present in verified valuation rows | At least one valid derived price bar exists | 1s | Performance-only fallback |
+| 4 | `stock_terminal` | Deterministic assessment contract | No verified price series remains, or no valuation score passes | 1s | Structured `unavailable` |
+
+Price history is not a substitute for stock fundamental valuation. It preserves
+performance output and an analysis date; when valuation factors remain
+insufficient, the assessment is still `unavailable`.
+
+### Fund Matrix
+
+| Order | Step | Source | Admission and stop condition | Budget | Output |
+| ---: | --- | --- | --- | ---: | --- |
+| 1 | `exchange_fund_price_history` | Eastmoney adjusted exchange history or exact validated LKG | Verified exchange-traded series exists | 45s | Fund performance |
+| 2 | `fund_nav_history` | Eastmoney Pingzhongdata/F10 NAV or exact validated LKG | Verified ordinary NAV series exists | 60s | Fund performance |
+| 3 | `fund_holdings_valuation` | Verified fund, target ETF, or index holdings route | Existing weighted factor gates produce a score | 60s | `holdings_valuation` |
+| 4 | `fund_index_matrix` | The independent index matrix below | Official fundamentals or a verified price proxy produces a score | 90s | Index fallback result |
+| 5 | `fund_terminal` | Deterministic assessment contract | No verified fund or index method produces a score | 1s | Structured `unavailable` |
+
+Fund performance and valuation are independent. A NAV series can preserve
+return and drawdown output without authorizing a valuation score. Active funds
+mark the index matrix `tracked_index_not_applicable` instead of reporting a
+false index-source failure.
+
+### Index Matrix
+
+| Order | Step | Source | Admission and stop condition | Budget | Output |
+| ---: | --- | --- | --- | ---: | --- |
+| 1 | `official_index_fundamentals` | Official CSI valuation history and complete weights | Identity, date, history length, and complete-weight gates all pass | 60s | `index_fundamental_valuation` |
+| 2 | `target_etf_nav_history` | Verified target ETF NAV or exact validated LKG | The resolved target ETF has a valid series | 60s | Price-proxy input |
+| 3 | `sina_index_price_history` | Sina index history | Resolved index identity and valid rows are available | 45s | Price-proxy input |
+| 4 | `eastmoney_index_price_history` | Eastmoney index history | Resolved quote identity and valid rows are available | 45s | Price-proxy input |
+| 5 | `index_price_position_proxy` | The first verified price input above | Existing price-position sample gates produce a score | 1s | `price_position_proxy` |
+| 6 | `index_terminal` | Deterministic assessment contract | Neither official fundamentals nor a price proxy produces a score | 1s | Structured `unavailable` |
+
+Official index valuation and holdings valuation keep separate traces. Optional
+fund-name failure, holdings-route failure, official-source failure, and route
+rejection use normalized reason codes; volatile upstream exception messages do
+not enter `fallback_reasons`.
+
 ### Status Semantics
 
 | Status | Rule |
@@ -153,19 +210,19 @@ Priority definitions:
 
 | ID | Priority | Location | Current behavior | Required follow-up |
 | --- | --- | --- | --- | --- |
-| ST-01 | P0 (partial) | `MarketAnalysisAgent.analyze`, stock valuation load | Exact validated LKG history is used when available; no-snapshot source failure still aborts | Add the deterministic no-LKG stock degradation route |
-| ST-02 | P0 (partial) | `MarketAnalysisAgent.analyze`, stock price load | Exact validated LKG or valuation-derived bars can preserve output | Return structured `unavailable` when neither route is valid |
-| ST-03 | P0 (partial) | `MarketAnalysisAgent.analyze`, fund NAV load | Exchange price, ordinary NAV, and exact validated LKG routes are available | Return a structured terminal assessment when all routes fail |
-| ST-04 | P1 | `MarketAnalysisAgent.analyze`, fund name load | Name lookup is unguarded after NAV succeeds | Preserve code-based analysis and mark name source unavailable |
-| ST-05 | P1 | REIT profile resolution | Product classification can select REIT, then profile loading can abort | Return a REIT `unavailable` assessment with source diagnostics |
-| ST-06 | P1 | Index price fallback discovery | `find_index_for_fund` can fail while attempting the final proxy | Isolate discovery and retain the existing holdings result |
+| ST-01 | P0 (resolved) | `MarketAnalysisAgent.analyze`, stock valuation load | Source and LKG failure enter the stock matrix; valid price performance is retained while valuation returns structured `unavailable` | Keep source-failure and no-score regression tests |
+| ST-02 | P0 (resolved) | `MarketAnalysisAgent.analyze`, stock price load | Exact validated LKG, valuation-derived bars, and structured terminal output are deterministic | Keep price-failure and no-data regression tests |
+| ST-03 | P0 (resolved) | `MarketAnalysisAgent.analyze`, fund NAV load | Exchange price, ordinary NAV, exact validated LKG, and structured terminal output are deterministic | Keep all-routes-failed regression tests |
+| ST-04 | P1 (resolved) | `MarketAnalysisAgent.analyze`, fund name load | Code-based analysis continues and records an optional-source diagnostic | Keep valid-result preservation tests |
+| ST-05 | P1 (resolved) | REIT profile resolution | Profile failure returns a REIT-scoped structured `unavailable` result and fund trace | Keep dedicated REIT failure injection coverage |
+| ST-06 | P1 (resolved) | Index price fallback discovery | Discovery failure is isolated and cannot discard an existing holdings result | Keep holdings-result preservation tests |
 | ST-07 | P0 (resolved) | `/api/analyze` tool boundary | Tool failures retain stable category and retryability; only invalid requests map to HTTP 400 | Keep category mappings covered by API and tool-boundary regression tests |
 | ST-08 | P0 (resolved) | `/api/analyze` persistence | Post-compute save failures return the valid analysis with `analysis_id=null` and structured persistence diagnostics | Keep direct, synchronous-chat, and streaming-chat failure tests |
 | ST-09 | P0 | Chat analysis tool call | Any finance tool error terminates the chat preparation path | Return and explain the structured degraded/unavailable assessment |
 | ST-10 | P0 | Finance tool executor | The entire analysis has one 90-second timeout and discards late partial work | Add bounded stage budgets and persist usable intermediate snapshots |
 | ST-11 | P0 | Frontend `requestJson` | Non-2xx responses are converted to an exception; no structured partial result can render | Render assessment status independently from transport and persistence warnings |
 | ST-12 | P0 (resolved) | `ValidatedSnapshotStore` | Normalized snapshots enforce identity, source, versions, age, hash, row count, and dataset validation | Keep corruption, staleness, malformed-response, and fallback tests |
-| ST-13 | P1 | Fund holdings route | Holdings failures are isolated, but the caught error is dropped when the route object is absent | Preserve stable source failure codes in the assessment |
+| ST-13 | P1 (resolved) | Fund holdings route | Route failure is preserved as `fund_holdings_route_unavailable` in route metadata, assessment, and trace | Keep stable-code regression tests |
 | ST-14 | P2 | Source health | No aggregate source success rate, last success time, or circuit state is exposed | Add source health diagnostics after fallback routes are implemented |
 
 ## Existing Safe Isolation
@@ -184,11 +241,11 @@ not the first interruption targets.
 
 ## Next Implementation Order
 
-After this contract and audit:
+After the deterministic matrices:
 
-1. Implement stock, fund, and index deterministic fallback matrices.
-2. Return structured unavailable results for terminal no-data cases.
-3. Render complete, degraded, stale, unavailable, and persistence states in the frontend.
-4. Add remaining route-mismatch, timeout, and partial-tool failure injection tests.
+1. Render complete, degraded, stale, unavailable, and persistence states in the frontend.
+2. Add remaining route-mismatch, timeout, and partial-tool failure injection tests.
+3. Enforce the declared timeout budgets as independent stage deadlines.
+4. Add source-health diagnostics after the fallback behavior is stable.
 
 Strategy factors and weights remain frozen until these stability gates pass.

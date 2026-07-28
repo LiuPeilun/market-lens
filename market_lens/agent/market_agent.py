@@ -12,7 +12,7 @@ from market_lens.data.eastmoney import (
     is_a_share_symbol,
     stock_bars_from_valuations,
 )
-from market_lens.errors import DataUnavailableError, InvalidRequestError
+from market_lens.errors import InvalidRequestError
 from market_lens.types import (
     AssetSearchResult,
     FundHolding,
@@ -33,6 +33,12 @@ from market_lens.valuation.analyzer import analyze_fund, analyze_stock
 from market_lens.valuation.assessment import (
     build_fund_assessment,
     build_unavailable_assessment,
+)
+from market_lens.valuation.fallback_matrix import (
+    FallbackTrace,
+    attach_fallback_traces,
+    new_fallback_trace,
+    stable_reason_code,
 )
 from market_lens.valuation.framework import analyze_index_price_proxy
 from market_lens.valuation.index_data import (
@@ -72,22 +78,77 @@ class MarketAnalysisAgent:
     ) -> dict[str, Any]:
         retrieved_at = datetime.now(UTC)
         if asset_type == "stock":
+            stock_trace = new_fallback_trace("stock")
             consume_lkg_events(self.data_client)
-            all_valuations = self.data_client.get_stock_valuation(code)
+            try:
+                all_valuations = self.data_client.get_stock_valuation(code)
+            except (EastmoneyError, KeyError, TypeError, ValueError):
+                all_valuations = []
+                stock_trace.record(
+                    "stock_valuation_history",
+                    "unavailable",
+                    reason="stock_valuation_history_unavailable",
+                )
+            else:
+                stock_trace.record(
+                    "stock_valuation_history",
+                    "available" if all_valuations else "unavailable",
+                    reason=None if all_valuations else "stock_valuation_history_empty",
+                )
             stock_name = next((item.name for item in reversed(all_valuations) if item.name), None)
             valuations = [item for item in all_valuations if start <= item.date <= end]
             try:
                 bars = self.data_client.get_stock_history(code, start=start, end=end)
-            except EastmoneyError:
-                bars = stock_bars_from_valuations(valuations)
+            except (EastmoneyError, KeyError, TypeError, ValueError):
+                bars = []
+                stock_trace.record(
+                    "stock_price_history",
+                    "unavailable",
+                    reason="stock_price_history_unavailable",
+                )
+            else:
+                stock_trace.record(
+                    "stock_price_history",
+                    "available" if bars else "unavailable",
+                    reason=None if bars else "stock_price_history_empty",
+                )
             if not bars:
-                raise DataUnavailableError(
-                    "stock_price_data_unavailable",
-                    (
-                        f"No stock price data found for {code}. "
-                        "If this is a fund code, choose asset_type='fund'."
+                bars = stock_bars_from_valuations(valuations)
+                stock_trace.record(
+                    "valuation_price_projection",
+                    "available" if bars else "unavailable",
+                    reason=None if bars else "valuation_price_projection_unavailable",
+                )
+            else:
+                stock_trace.record(
+                    "valuation_price_projection",
+                    "skipped",
+                    reason="stock_price_history_selected",
+                )
+            if not bars:
+                stock_trace.record(
+                    "stock_terminal",
+                    "available",
+                    reason="stock_price_data_unavailable",
+                    selected=True,
+                )
+                stock_trace.finish(terminal_reason="stock_price_data_unavailable")
+                result = build_terminal_market_result(
+                    asset_type="stock",
+                    code=code,
+                    analysis_as_of=end,
+                    retrieved_at=retrieved_at,
+                    fallback_reasons=list(
+                        dict.fromkeys(
+                            [
+                                "stock_price_data_unavailable",
+                                *stock_trace.reason_codes(),
+                            ]
+                        )
                     ),
                 )
+                attach_fallback_traces(result, stock_trace)
+                return result
             critical_lkg_events = consume_lkg_events(self.data_client)
             profile = None
             financials = []
@@ -157,9 +218,40 @@ class MarketAnalysisAgent:
                 retrieved_at=retrieved_at,
             )
             consume_lkg_events(self.data_client)
+            valuation_score = (
+                ((result.get("assessment") or {}).get("dimensions") or {})
+                .get("valuation", {})
+                .get("score")
+            )
+            if is_finite_number(valuation_score):
+                stock_trace.record(
+                    "stock_valuation_history",
+                    "available",
+                    selected=True,
+                )
+                stock_trace.record(
+                    "stock_terminal",
+                    "skipped",
+                    reason="stock_fundamental_valuation_selected",
+                )
+            else:
+                stock_trace.record(
+                    "stock_terminal",
+                    "available",
+                    reason="stock_valuation_score_unavailable",
+                    selected=True,
+                )
+                stock_trace.finish(terminal_reason="stock_valuation_score_unavailable")
+                append_assessment_fallback_reasons(
+                    result,
+                    ["stock_valuation_score_unavailable"],
+                )
+            attach_fallback_traces(result, stock_trace)
             apply_last_known_good_diagnostics(result, critical_lkg_events)
             return result
         if asset_type == "fund":
+            fund_trace = new_fallback_trace("fund")
+            index_trace = new_fallback_trace("index")
             product_info = None
             product_info_error = None
             try:
@@ -170,13 +262,44 @@ class MarketAnalysisAgent:
                 product_info is not None
                 and str(product_info.fund_type or "").strip().casefold() == "reits"
             ):
-                reit_profile = self.data_client.get_reit_profile(code)
-                return self._analyze_reit(
-                    reit_profile,
-                    start=start,
-                    end=end,
-                    retrieved_at=retrieved_at,
-                )
+                mark_fund_steps_skipped_for_reit(fund_trace)
+                try:
+                    reit_profile = self.data_client.get_reit_profile(code)
+                except (EastmoneyError, KeyError, TypeError, ValueError):
+                    fund_trace.record(
+                        "fund_terminal",
+                        "available",
+                        reason="reit_profile_unavailable",
+                        selected=True,
+                    )
+                    fund_trace.finish(terminal_reason="reit_profile_unavailable")
+                    result = build_terminal_market_result(
+                        asset_type="fund",
+                        code=code,
+                        name=product_info.fund_name,
+                        profile="reit_basic",
+                        analysis_as_of=end,
+                        retrieved_at=retrieved_at,
+                        fallback_reasons=["reit_profile_unavailable"],
+                    )
+                else:
+                    result = self._analyze_reit(
+                        reit_profile,
+                        start=start,
+                        end=end,
+                        retrieved_at=retrieved_at,
+                    )
+                    fund_trace.record(
+                        "fund_terminal",
+                        "available",
+                        reason="reit_production_model_unavailable",
+                        selected=True,
+                    )
+                    fund_trace.finish(
+                        terminal_reason="reit_production_model_unavailable"
+                    )
+                attach_fallback_traces(result, fund_trace)
+                return result
 
             consume_lkg_events(self.data_client)
             try:
@@ -185,19 +308,92 @@ class MarketAnalysisAgent:
                     start=start,
                     end=end,
                 )
-            except EastmoneyError:
+            except (EastmoneyError, KeyError, TypeError, ValueError):
                 nav_points = []
+                fund_trace.record(
+                    "exchange_fund_price_history",
+                    "unavailable",
+                    reason="exchange_fund_price_history_unavailable",
+                )
+            else:
+                fund_trace.record(
+                    "exchange_fund_price_history",
+                    "available" if nav_points else "unavailable",
+                    reason=None if nav_points else "exchange_fund_price_history_not_applicable",
+                    selected=bool(nav_points),
+                )
             fund_data_source = "exchange_price_history" if nav_points else "fund_nav_history"
             if not nav_points:
-                nav_points = self.data_client.get_fund_nav(code, start=start, end=end)
-            if not nav_points:
-                raise DataUnavailableError(
-                    "fund_nav_data_unavailable",
-                    f"No fund NAV data found for {code}.",
+                try:
+                    nav_points = self.data_client.get_fund_nav(
+                        code,
+                        start=start,
+                        end=end,
+                    )
+                except (EastmoneyError, KeyError, TypeError, ValueError):
+                    nav_points = []
+                    fund_trace.record(
+                        "fund_nav_history",
+                        "unavailable",
+                        reason="fund_nav_history_unavailable",
+                    )
+                else:
+                    fund_trace.record(
+                        "fund_nav_history",
+                        "available" if nav_points else "unavailable",
+                        reason=None if nav_points else "fund_nav_history_empty",
+                        selected=bool(nav_points),
+                    )
+            else:
+                fund_trace.record(
+                    "fund_nav_history",
+                    "skipped",
+                    reason="exchange_fund_price_history_selected",
                 )
+            if not nav_points:
+                fund_trace.record(
+                    "fund_holdings_valuation",
+                    "skipped",
+                    reason="fund_nav_data_unavailable",
+                )
+                fund_trace.record(
+                    "fund_index_matrix",
+                    "skipped",
+                    reason="fund_nav_data_unavailable",
+                )
+                fund_trace.record(
+                    "fund_terminal",
+                    "available",
+                    reason="fund_nav_data_unavailable",
+                    selected=True,
+                )
+                fund_trace.finish(terminal_reason="fund_nav_data_unavailable")
+                result = build_terminal_market_result(
+                    asset_type="fund",
+                    code=code,
+                    analysis_as_of=end,
+                    retrieved_at=retrieved_at,
+                    fallback_reasons=list(
+                        dict.fromkeys(
+                            [
+                                "fund_nav_data_unavailable",
+                                *fund_trace.reason_codes(),
+                            ]
+                        )
+                    ),
+                )
+                mark_index_trace_not_applicable(index_trace)
+                attach_fallback_traces(result, fund_trace, index_trace)
+                return result
             critical_lkg_events = consume_lkg_events(self.data_client)
-            fund_name = self.data_client.get_fund_name(code)
+            fund_name_error = None
+            try:
+                fund_name = self.data_client.get_fund_name(code)
+            except (EastmoneyError, KeyError, TypeError, ValueError):
+                fund_name = None
+                fund_name_error = "fund_name_unavailable"
             holdings_route = None
+            holdings_route_reasons: list[str] = []
             try:
                 holdings_route = self.data_client.get_fund_holdings_route(
                     code,
@@ -205,8 +401,9 @@ class MarketAnalysisAgent:
                     analysis_end=end,
                 )
                 holdings = holdings_route.holdings
-            except EastmoneyError:
+            except (EastmoneyError, KeyError, TypeError, ValueError):
                 holdings = []
+                holdings_route_reasons.append("fund_holdings_route_unavailable")
             index_data_route = self._load_fund_index_data_route(
                 holdings_route,
                 analysis_end=end,
@@ -215,6 +412,7 @@ class MarketAnalysisAgent:
                 holdings_route,
                 start=start,
                 end=end,
+                trace=index_trace,
             )
             holding_analyses = self._analyze_fund_holdings(holdings, end=end)
             result = analyze_fund(
@@ -232,9 +430,13 @@ class MarketAnalysisAgent:
                 retrieved_at=retrieved_at,
             )
             apply_holdings_route_method(result["valuation"], holdings_route)
-            route_metadata = serialize_holdings_route(holdings_route)
+            route_metadata = serialize_holdings_route(
+                holdings_route,
+                fallback_reasons=holdings_route_reasons,
+            )
             result["holdings_route"] = route_metadata
             result["valuation"]["holdings_route"] = route_metadata
+            holdings_score = result["valuation"].get("score")
 
             official_index_valuation = analyze_csi_index_valuation(
                 index_data_route,
@@ -245,6 +447,26 @@ class MarketAnalysisAgent:
                 official_index_valuation
                 and official_index_valuation.get("score") is not None
             )
+            if index_data_route.scope == "unavailable":
+                index_trace.record(
+                    "official_index_fundamentals",
+                    "unavailable",
+                    reason=first_stable_reason(
+                        index_data_route.fallback_reasons,
+                        default="official_index_fundamentals_unavailable",
+                    ),
+                )
+            else:
+                index_trace.record(
+                    "official_index_fundamentals",
+                    "available",
+                    selected=official_index_valuation_used,
+                    reason=(
+                        None
+                        if official_index_valuation_used
+                        else "official_index_scoring_gates_not_met"
+                    ),
+                )
             if official_index_valuation_used and official_index_valuation is not None:
                 previous_valuation = result["valuation"]
                 result["valuation"] = official_index_valuation
@@ -258,9 +480,27 @@ class MarketAnalysisAgent:
                     scoring_eligible=True,
                 )
 
+            fund_trace.record(
+                "fund_holdings_valuation",
+                "available" if is_finite_number(holdings_score) else "unavailable",
+                reason=(
+                    None
+                    if is_finite_number(holdings_score)
+                    else "holdings_valuation_unavailable"
+                ),
+                selected=bool(
+                    is_finite_number(holdings_score)
+                    and not official_index_valuation_used
+                ),
+            )
             if result["valuation"].get("score") is None:
                 if index_candidate is None:
-                    index_candidate = self.data_client.find_index_for_fund(fund_name or code)
+                    try:
+                        index_candidate = self.data_client.find_index_for_fund(
+                            fund_name or code
+                        )
+                    except (EastmoneyError, KeyError, TypeError, ValueError):
+                        index_candidate = None
                     if index_candidate and index_candidate.quote_id:
                         try:
                             index_bars = self.data_client.get_index_history(
@@ -268,11 +508,21 @@ class MarketAnalysisAgent:
                                 start=start,
                                 end=end,
                             )
-                        except EastmoneyError:
+                        except (EastmoneyError, KeyError, TypeError, ValueError):
                             index_bars = []
+                            index_trace.record(
+                                "eastmoney_index_price_history",
+                                "unavailable",
+                                reason="eastmoney_index_price_history_unavailable",
+                            )
                         if index_bars:
                             benchmark_source = "tracked_index_price_history"
+                            index_trace.record(
+                                "eastmoney_index_price_history",
+                                "available",
+                            )
                 index_proxy_sources = {
+                    "target_etf_nav_history",
                     "tracked_index_price_history",
                     "sina_index_price_history",
                 }
@@ -294,6 +544,22 @@ class MarketAnalysisAgent:
                         previous_valuation,
                         route_metadata,
                     )
+            proxy_used = (
+                result["valuation"].get("status") == "proxy_valuation"
+                and is_finite_number(result["valuation"].get("score"))
+            )
+            if proxy_used:
+                index_trace.record(
+                    "index_price_position_proxy",
+                    "available",
+                    selected=True,
+                )
+            elif not official_index_valuation_used:
+                index_trace.record(
+                    "index_price_position_proxy",
+                    "unavailable",
+                    reason="index_price_position_proxy_unavailable",
+                )
             if fund_data_source == "exchange_price_history":
                 result["notes"].insert(
                     0,
@@ -305,6 +571,9 @@ class MarketAnalysisAgent:
                     "ETF valuation currently uses tracked-index price percentile as a proxy.",
                 )
             index_data_metadata = serialize_fund_index_data_route(index_data_route)
+            index_data_metadata["fallback_reasons"] = stable_reason_codes(
+                index_data_metadata.get("fallback_reasons")
+            )
             result["index_data_route"] = index_data_metadata
             result["valuation"]["index_data_route"] = index_data_metadata
             if official_index_valuation_used:
@@ -325,6 +594,88 @@ class MarketAnalysisAgent:
                 result,
                 retrieved_at=retrieved_at,
             )
+            final_score = (
+                ((result.get("assessment") or {}).get("dimensions") or {})
+                .get("valuation", {})
+                .get("score")
+            )
+            index_relevant = bool(
+                holdings_route
+                and holdings_route.tracking
+                and holdings_route.tracking.index_code
+            )
+            if official_index_valuation_used or proxy_used:
+                fund_trace.record(
+                    "fund_index_matrix",
+                    "available",
+                    selected=True,
+                )
+                fund_trace.record(
+                    "fund_terminal",
+                    "skipped",
+                    reason="fund_index_matrix_selected",
+                )
+                index_trace.record(
+                    "index_terminal",
+                    "skipped",
+                    reason="index_valuation_selected",
+                )
+            elif is_finite_number(final_score):
+                fund_trace.record(
+                    "fund_index_matrix",
+                    "skipped",
+                    reason="fund_holdings_valuation_selected",
+                )
+                fund_trace.record(
+                    "fund_terminal",
+                    "skipped",
+                    reason="fund_holdings_valuation_selected",
+                )
+                if not index_relevant:
+                    mark_index_trace_not_applicable(index_trace)
+                else:
+                    index_trace.record(
+                        "index_terminal",
+                        "available",
+                        reason="index_valuation_unavailable",
+                        selected=True,
+                    )
+                    index_trace.finish(terminal_reason="index_valuation_unavailable")
+            else:
+                fund_trace.record(
+                    "fund_index_matrix",
+                    "unavailable",
+                    reason="index_fallback_unavailable",
+                )
+                fund_trace.record(
+                    "fund_terminal",
+                    "available",
+                    reason="fund_valuation_unavailable",
+                    selected=True,
+                )
+                fund_trace.finish(terminal_reason="fund_valuation_unavailable")
+                append_assessment_fallback_reasons(
+                    result,
+                    ["fund_valuation_unavailable", *holdings_route_reasons],
+                )
+                if index_relevant:
+                    index_trace.record(
+                        "index_terminal",
+                        "available",
+                        reason="index_valuation_unavailable",
+                        selected=True,
+                    )
+                    index_trace.finish(terminal_reason="index_valuation_unavailable")
+                else:
+                    mark_index_trace_not_applicable(index_trace)
+            if fund_name_error:
+                append_optional_source_diagnostic(
+                    result,
+                    key="fund_name",
+                    source="eastmoney_pingzhongdata",
+                    reason=fund_name_error,
+                    retrieved_at=retrieved_at,
+                )
             product_profile = (
                 ((result.get("valuation") or {}).get("product_data") or {}).get(
                     "profile"
@@ -338,6 +689,7 @@ class MarketAnalysisAgent:
                 retrieved_at=retrieved_at,
             )
             consume_lkg_events(self.data_client)
+            attach_fallback_traces(result, fund_trace, index_trace)
             apply_last_known_good_diagnostics(result, critical_lkg_events)
             return result
         raise InvalidRequestError(
@@ -576,7 +928,7 @@ class MarketAnalysisAgent:
             valuation_points = self.data_client.get_csi_index_valuation_history(
                 tracking.index_code
             )
-        except (EastmoneyError, ValueError) as exc:
+        except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
             return unavailable_fund_index_data_route(
                 tracking,
                 f"official_index_valuation_unavailable: {exc}",
@@ -585,7 +937,7 @@ class MarketAnalysisAgent:
             constituent_weights = self.data_client.get_csi_index_full_weights(
                 tracking.index_code
             )
-        except (EastmoneyError, ValueError) as exc:
+        except (EastmoneyError, KeyError, TypeError, ValueError) as exc:
             return unavailable_fund_index_data_route(
                 tracking,
                 f"official_index_complete_weights_unavailable: {exc}",
@@ -609,9 +961,20 @@ class MarketAnalysisAgent:
         *,
         start: date,
         end: date,
+        trace: FallbackTrace,
     ) -> tuple[AssetSearchResult | None, list[StockBar], str]:
         index_code = route.tracking.index_code if route and route.tracking else None
         if not index_code:
+            for step_key in (
+                "target_etf_nav_history",
+                "sina_index_price_history",
+                "eastmoney_index_price_history",
+            ):
+                trace.record(
+                    step_key,
+                    "skipped",
+                    reason="tracked_index_not_applicable",
+                )
             return None, [], "unavailable"
         try:
             candidates = self.data_client.search_assets(
@@ -619,7 +982,7 @@ class MarketAnalysisAgent:
                 limit=5,
                 include_indexes=True,
             )
-        except EastmoneyError:
+        except (EastmoneyError, KeyError, TypeError, ValueError):
             candidates = []
         candidate = next(
             (
@@ -639,11 +1002,32 @@ class MarketAnalysisAgent:
                     start=start,
                     end=end,
                 )
-            except EastmoneyError:
+            except (EastmoneyError, KeyError, TypeError, ValueError):
                 target_nav = []
+                trace.record(
+                    "target_etf_nav_history",
+                    "unavailable",
+                    reason="target_etf_nav_history_unavailable",
+                )
             target_bars = fund_nav_points_as_bars(target_nav)
             if target_bars:
+                trace.record(
+                    "target_etf_nav_history",
+                    "available",
+                )
                 return candidate, target_bars, "target_etf_nav_history"
+            if not trace.was_recorded("target_etf_nav_history"):
+                trace.record(
+                    "target_etf_nav_history",
+                    "unavailable",
+                    reason="target_etf_nav_history_empty",
+                )
+        else:
+            trace.record(
+                "target_etf_nav_history",
+                "skipped",
+                reason="target_etf_not_applicable",
+            )
 
         if candidate and candidate.quote_id:
             try:
@@ -653,20 +1037,66 @@ class MarketAnalysisAgent:
                     start=start,
                     end=end,
                 )
-            except EastmoneyError:
+            except (EastmoneyError, KeyError, TypeError, ValueError):
                 bars = []
+                trace.record(
+                    "sina_index_price_history",
+                    "unavailable",
+                    reason="sina_index_price_history_unavailable",
+                )
             if bars:
+                trace.record(
+                    "sina_index_price_history",
+                    "available",
+                )
+                trace.record(
+                    "eastmoney_index_price_history",
+                    "skipped",
+                    reason="sina_index_price_history_selected",
+                )
                 return candidate, bars, "sina_index_price_history"
+            if not trace.was_recorded("sina_index_price_history"):
+                trace.record(
+                    "sina_index_price_history",
+                    "unavailable",
+                    reason="sina_index_price_history_empty",
+                )
             try:
                 bars = self.data_client.get_index_history(
                     candidate.quote_id,
                     start=start,
                     end=end,
                 )
-            except EastmoneyError:
+            except (EastmoneyError, KeyError, TypeError, ValueError):
                 bars = []
+                trace.record(
+                    "eastmoney_index_price_history",
+                    "unavailable",
+                    reason="eastmoney_index_price_history_unavailable",
+                )
             if bars:
+                trace.record(
+                    "eastmoney_index_price_history",
+                    "available",
+                )
                 return candidate, bars, "tracked_index_price_history"
+            if not trace.was_recorded("eastmoney_index_price_history"):
+                trace.record(
+                    "eastmoney_index_price_history",
+                    "unavailable",
+                    reason="eastmoney_index_price_history_empty",
+                )
+        else:
+            trace.record(
+                "sina_index_price_history",
+                "skipped",
+                reason="tracked_index_quote_unavailable",
+            )
+            trace.record(
+                "eastmoney_index_price_history",
+                "skipped",
+                reason="tracked_index_quote_unavailable",
+            )
         return candidate, [], "unavailable"
 
     def _analyze_fund_holdings(
@@ -773,6 +1203,175 @@ def consume_lkg_events(data_client: Any) -> list[dict[str, Any]]:
     if not isinstance(events, list):
         return []
     return [event for event in events if isinstance(event, dict)]
+
+
+def is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and isfinite(value)
+    )
+
+
+def stable_reason_codes(reasons: Any) -> list[str]:
+    if not isinstance(reasons, list | tuple):
+        return []
+    return list(
+        dict.fromkeys(
+            code
+            for reason in reasons
+            if (code := stable_reason_code(str(reason)))
+        )
+    )
+
+
+def first_stable_reason(reasons: Any, *, default: str) -> str:
+    normalized = stable_reason_codes(reasons)
+    return normalized[0] if normalized else default
+
+
+def append_assessment_fallback_reasons(
+    result: dict[str, Any],
+    reasons: list[str],
+) -> None:
+    assessment = result.get("assessment")
+    if not isinstance(assessment, dict):
+        return
+    normalized = stable_reason_codes(reasons)
+    existing = stable_reason_codes(assessment.get("fallback_reasons"))
+    assessment["fallback_reasons"] = list(dict.fromkeys([*existing, *normalized]))
+    confidence_detail = assessment.get("confidence_detail")
+    if isinstance(confidence_detail, dict):
+        existing_detail = stable_reason_codes(confidence_detail.get("reasons"))
+        confidence_detail["reasons"] = list(
+            dict.fromkeys([*existing_detail, *normalized])
+        )
+
+
+def append_optional_source_diagnostic(
+    result: dict[str, Any],
+    *,
+    key: str,
+    source: str,
+    reason: str,
+    retrieved_at: datetime,
+) -> None:
+    assessment = result.get("assessment")
+    if not isinstance(assessment, dict):
+        return
+    data_quality = assessment.setdefault("data_quality", {})
+    sources = data_quality.setdefault("sources", [])
+    reason_code = stable_reason_code(reason) or "optional_source_unavailable"
+    sources.append(
+        {
+            "key": key,
+            "source": source,
+            "status": "unavailable",
+            "source_as_of": None,
+            "retrieved_at": retrieved_at.isoformat().replace("+00:00", "Z"),
+            "reason": reason_code,
+        }
+    )
+    warnings = data_quality.setdefault("warnings", [])
+    warning = f"Optional source '{key}' is unavailable ({reason_code})."
+    if warning not in warnings:
+        warnings.append(warning)
+
+
+def mark_index_trace_not_applicable(trace: FallbackTrace) -> None:
+    for step in trace.matrix.steps:
+        trace.record(
+            step.key,
+            "skipped",
+            reason="tracked_index_not_applicable",
+        )
+    trace.finish(terminal_reason="tracked_index_not_applicable")
+
+
+def mark_fund_steps_skipped_for_reit(trace: FallbackTrace) -> None:
+    for step in trace.matrix.steps:
+        if step.key == "fund_terminal":
+            continue
+        trace.record(
+            step.key,
+            "skipped",
+            reason="reit_product_selected",
+        )
+
+
+def build_terminal_market_result(
+    *,
+    asset_type: str,
+    code: str,
+    name: str | None = None,
+    profile: str | None = None,
+    analysis_as_of: date,
+    retrieved_at: datetime,
+    fallback_reasons: list[str],
+) -> dict[str, Any]:
+    reasons = stable_reason_codes(fallback_reasons)
+    warning = "No verified market dataset can support a numeric valuation."
+    result: dict[str, Any] = {
+        "asset_type": asset_type,
+        "code": code,
+        "name": name,
+        "as_of": analysis_as_of.isoformat(),
+        "valuation": {
+            "status": "unavailable",
+            "method": "unavailable",
+            "score": None,
+            "confidence": 0.0,
+            "missing_factors": [],
+        },
+        "performance": {
+            "sample_size": 0,
+            "total_return": None,
+            "annualized_return": None,
+            "max_drawdown": None,
+            "total_return_text": "N/A",
+            "annualized_return_text": "N/A",
+            "max_drawdown_text": "N/A",
+        },
+        "notes": [
+            warning,
+            "This is a research summary, not investment advice.",
+        ],
+    }
+    if asset_type == "stock":
+        result["latest_price"] = None
+        resolved_profile = profile or "stock"
+    else:
+        result.update(
+            {
+                "data_source": "unavailable",
+                "holdings_route": serialize_holdings_route(
+                    None,
+                    fallback_reasons=reasons,
+                ),
+                "latest_unit_nav": None,
+                "latest_cumulative_nav": None,
+            }
+        )
+        result["valuation"]["holdings_route"] = result["holdings_route"]
+        resolved_profile = profile or "fund"
+    result["assessment"] = build_unavailable_assessment(
+        profile=resolved_profile,
+        analysis_as_of=analysis_as_of,
+        retrieved_at=retrieved_at,
+        sources=[
+            {
+                "key": f"{asset_type}_primary_market_data",
+                "source": "deterministic_fallback_matrix",
+                "status": "unavailable",
+                "source_as_of": None,
+                "retrieved_at": retrieved_at.isoformat().replace("+00:00", "Z"),
+                "reasons": reasons,
+            }
+        ],
+        warnings=[warning],
+        fallback_reasons=reasons,
+    )
+    return result
 
 
 def apply_last_known_good_diagnostics(
@@ -896,14 +1495,22 @@ def fund_nav_points_as_bars(points: list[FundNavPoint]) -> list[StockBar]:
     return bars
 
 
-def serialize_holdings_route(route: FundHoldingsRoute | None) -> dict[str, Any]:
+def serialize_holdings_route(
+    route: FundHoldingsRoute | None,
+    *,
+    fallback_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    route_reasons = list(route.fallback_reasons) if route else []
+    normalized_reasons = stable_reason_codes(
+        [*route_reasons, *(fallback_reasons or [])]
+    )
     if route is None:
         return {
             "source": "unavailable",
             "scope": "unavailable",
             "as_of": None,
             "coverage": 0.0,
-            "fallback_reasons": [],
+            "fallback_reasons": normalized_reasons,
             "fund_type": None,
             "tracked_index_code": None,
             "tracked_index_name": None,
@@ -921,7 +1528,7 @@ def serialize_holdings_route(route: FundHoldingsRoute | None) -> dict[str, Any]:
         "scope": route.scope,
         "as_of": route.as_of.isoformat() if route.as_of else None,
         "coverage": route.coverage,
-        "fallback_reasons": list(route.fallback_reasons),
+        "fallback_reasons": normalized_reasons,
         "fund_type": tracking.fund_type if tracking else None,
         "tracked_index_code": tracking.index_code if tracking else None,
         "tracked_index_name": tracking.index_name if tracking else None,

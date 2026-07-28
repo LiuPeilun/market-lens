@@ -353,6 +353,10 @@ def test_market_agent_prefers_official_index_fundamentals() -> None:
         "csi_index_fundamental_v1"
     )
     assert result["assessment"]["dimensions"]["valuation"]["confidence"] <= 0.6
+    assert result["fallback_matrices"]["fund"]["selected_step"] == "fund_index_matrix"
+    assert result["fallback_matrices"]["index"]["selected_step"] == (
+        "official_index_fundamentals"
+    )
     assert not any(
         note.startswith("Holding-level valuation uses")
         for note in result["notes"]
