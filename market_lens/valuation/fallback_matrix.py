@@ -26,6 +26,11 @@ class FallbackStep:
     output_method: str
     stop_condition: str
 
+    @property
+    def success_method(self) -> str:
+        """Compatibility alias for traces emitted before output_method was explicit."""
+        return self.output_method
+
 
 @dataclass(frozen=True)
 class FallbackMatrix:
@@ -101,6 +106,7 @@ class FallbackTrace:
                     "timeout_budget_seconds": step.timeout_budget_seconds,
                     "admission_condition": step.admission_condition,
                     "output_method": step.output_method,
+                    "success_method": step.success_method,
                     "stop_condition": step.stop_condition,
                     **self._states.get(
                         step.key,

@@ -8,7 +8,7 @@
 - 当前阶段：市场分析稳定性与数据可靠性
 - 当前工作包：V2-5D 稳定评估输出与数据可靠性（确定性降级矩阵已完成，下一步完善前端状态展示与故障注入测试）；V2-5B 非中证指数供应商验证、V2-7 回测扩样暂缓
 - 当前分支：`main`
-- 最新提交基线：`3ba66fd docs(project): record validated snapshot milestone`
+- 最新提交基线：`030c45f fix(analysis): expose fallback admission contracts`
 - 工作区验证：后端 `336 passed, 6 skipped`，Ruff 与 `git diff --check` 通过；前端 lint 与生产构建沿用上一阶段通过结果（本阶段未修改前端）
 
 ## 项目目标

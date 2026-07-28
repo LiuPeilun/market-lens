@@ -228,6 +228,7 @@ def test_fallback_trace_serializes_stable_reason_codes() -> None:
     assert serialized["selected_method"] == "stock_price_history"
     assert serialized["steps"][0]["admission_condition"]
     assert serialized["steps"][0]["output_method"] == "fundamental_valuation"
+    assert serialized["steps"][0]["success_method"] == "fundamental_valuation"
     assert serialized["steps"][0]["reason"] == "stock_source_disconnected"
     assert result["assessment"]["data_quality"]["fallback_matrices"] == (
         result["fallback_matrices"]
