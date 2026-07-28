@@ -6,10 +6,10 @@
 
 - 最后更新：2026-07-28
 - 当前阶段：市场分析稳定性与数据可靠性
-- 当前工作包：V2-5D 稳定评估输出与数据可靠性（最高优先级：输出契约、中断点审计和稳定错误分类已完成，下一步解耦分析计算与持久化）；V2-5B 非中证指数供应商验证、V2-7 回测扩样暂缓
+- 当前工作包：V2-5D 稳定评估输出与数据可靠性（最高优先级：输出契约、中断点审计、错误分类和持久化解耦已完成，下一步建立可验证 LKG 快照）；V2-5B 非中证指数供应商验证、V2-7 回测扩样暂缓
 - 当前分支：`main`
-- 最新提交基线：`5b93760 feat(valuation): define stable assessment contract`
-- 工作区验证：后端 `304 passed, 6 skipped`，Ruff 通过；前端 lint 与生产构建通过
+- 最新提交基线：`02db9b4 feat(api): add stable analysis error taxonomy`
+- 工作区验证：后端 `308 passed, 6 skipped`，Ruff 通过；前端 lint 与生产构建通过
 
 ## 项目目标
 
@@ -482,7 +482,7 @@ LLM 只接收最终结构化结果和诊断，不参与模型路由、数据补�
 - [x] 定义稳定评估输出契约：所有新分析统一输出 `complete`、`degraded` 或 `unavailable`，并声明确定性的 `method` 与稳定 `fallback_reasons`；没有可验证数值时不得伪造估值分。
 - [x] 审计股票、基金、指数、REIT、API、持久化、聊天工具、前端和缓存链路中可能中断分析或形成空白页面的路径，并按 P0/P1/P2 排序。
 - [x] 建立稳定错误分类，区分无效用户输入、上游暂时故障、数据确实不可用、内部错误和持久化故障；`ToolInvocationError` 不再继承 `ValueError`，API 和 SSE 输出稳定 `code/category/retryable`，上游故障不再误报 HTTP 400。
-- [ ] 解耦分析计算与持久化：保存 Supabase 失败时仍返回已计算结果，并附带可诊断的保存状态。
+- [x] 解耦分析计算与持久化：直接分析、同步聊天和流式聊天在结果形成后的 Supabase 写入失败时继续返回已计算结果，并输出 `saved/partial/failed/not_attempted`、失败操作和重试语义；认证、会话创建和审批状态等前置/关键写入继续失败关闭。
 - [ ] 建立经过来源身份、结构、时间和完整性校验的 last-known-good 快照；陈旧数据必须显式标注，不能静默冒充实时数据。
 - [ ] 分别实现股票、基金和指数的确定性降级矩阵，明确每层数据源、准入条件、超时预算、可输出方法和停止条件。
 - [ ] 前端按 `complete`、`degraded`、`unavailable` 渲染结果、降级原因和重试入口，允许展示部分成功结果。
@@ -589,6 +589,8 @@ REIT 数据结果：仅在基金详情精确返回 `FTYPE=Reits` 时建立 REIT 
 - 本轮不调整估值因子、权重、阈值、评分方法或模型版本；稳定性设计与 14 个中断点记录在 `docs/ANALYSIS_STABILITY.md`。
 - 稳定错误分类固定为 `invalid_request`、`upstream_unavailable`、`data_unavailable`、`internal_error` 和 `persistence_error`；HTTP 分别映射为 400、503、422、500 和 502。
 - 错误响应继续保留字符串 `detail` 兼容现有界面，同时增加稳定 `code/category/retryable`；内部错误统一使用公开安全消息，不透传原始异常细节。
+- 分析响应和聊天响应新增独立 `persistence` 状态。保存失败不得改变估值状态或隐藏计算结果；直接分析返回 `analysis_id=null`，聊天流在 `meta/done` 事件附带当前保存状态。
+- 只有结果形成后的派生记录写入可以非阻断；认证、会话初始化、用户流式请求入库和工具审批状态属于流程前置或恢复依据，仍必须失败关闭。
 
 ### 2026-07-22：行业细分模型数据研究
 

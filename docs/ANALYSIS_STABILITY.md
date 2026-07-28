@@ -54,6 +54,30 @@ with a fixed public message.
 results preserve error category and retryability through the finance capability,
 API, SSE, LLM tool payload, and frontend `ApiRequestError`.
 
+## Persistence Contract
+
+Assessment status and persistence status are independent. A valid computed
+assessment is not discarded when a post-compute Supabase write fails.
+
+| Status | Meaning |
+| --- | --- |
+| `saved` | Every attempted post-compute write succeeded |
+| `partial` | At least one post-compute write succeeded and at least one failed |
+| `failed` | Every attempted post-compute write failed |
+| `not_attempted` | No applicable post-compute write was attempted |
+
+Persistence diagnostics include a stable `error_code`, `retryable`, and ordered
+`failed_operations`. Direct analysis returns the computed result with
+`analysis_id=null` when `analysis_result` cannot be saved. Synchronous chat
+reports failures for analysis, session context, user message, and assistant
+message writes. Streaming chat adds the current persistence report to `meta` and
+`done` without replacing tokens with an error event.
+
+This non-blocking boundary applies only after a result or answer exists.
+Authentication, chat-session creation, initial streamed user-message storage,
+and tool-approval state remain fail-closed because the request cannot be safely
+executed or resumed without them.
+
 ### Status Semantics
 
 | Status | Rule |
@@ -94,7 +118,7 @@ Priority definitions:
 | ST-05 | P1 | REIT profile resolution | Product classification can select REIT, then profile loading can abort | Return a REIT `unavailable` assessment with source diagnostics |
 | ST-06 | P1 | Index price fallback discovery | `find_index_for_fund` can fail while attempting the final proxy | Isolate discovery and retain the existing holdings result |
 | ST-07 | P0 (resolved) | `/api/analyze` tool boundary | Tool failures retain stable category and retryability; only invalid requests map to HTTP 400 | Keep category mappings covered by API and tool-boundary regression tests |
-| ST-08 | P0 | `/api/analyze` persistence | Supabase save failure returns HTTP 502 after a valid analysis was already computed | Return the analysis with `analysis_id=null`; report persistence separately |
+| ST-08 | P0 (resolved) | `/api/analyze` persistence | Post-compute save failures return the valid analysis with `analysis_id=null` and structured persistence diagnostics | Keep direct, synchronous-chat, and streaming-chat failure tests |
 | ST-09 | P0 | Chat analysis tool call | Any finance tool error terminates the chat preparation path | Return and explain the structured degraded/unavailable assessment |
 | ST-10 | P0 | Finance tool executor | The entire analysis has one 90-second timeout and discards late partial work | Add bounded stage budgets and persist usable intermediate snapshots |
 | ST-11 | P0 | Frontend `requestJson` | Non-2xx responses are converted to an exception; no structured partial result can render | Render assessment status independently from transport and persistence warnings |
@@ -120,11 +144,10 @@ not the first interruption targets.
 
 After this contract and audit:
 
-1. Make analysis persistence non-blocking for an already computed result.
-2. Add validated last-known-good snapshots with source identity and age limits.
-3. Implement stock, fund, and index deterministic fallback matrices.
-4. Return structured unavailable results for terminal no-data cases.
-5. Render complete, degraded, stale, and unavailable states in the frontend.
-6. Add outage, malformed response, route mismatch, future-data, and timeout tests.
+1. Add validated last-known-good snapshots with source identity and age limits.
+2. Implement stock, fund, and index deterministic fallback matrices.
+3. Return structured unavailable results for terminal no-data cases.
+4. Render complete, degraded, stale, unavailable, and persistence states in the frontend.
+5. Add outage, malformed response, route mismatch, future-data, and timeout tests.
 
 Strategy factors and weights remain frozen until these stability gates pass.

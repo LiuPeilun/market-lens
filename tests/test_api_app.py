@@ -15,6 +15,7 @@ from market_lens.api.app import (
     verify_tool_approval_signature,
 )
 from market_lens.api.auth import get_current_user
+from market_lens.api.persistence import PersistenceTracker
 from market_lens.api.schemas import AnalysisHistoryResponse, AnalyzeResponse, ChatResponse
 from market_lens.storage.supabase import AuthenticatedUser, SupabaseError
 from market_lens.tools.models import PolicyDecision, ToolResult, ToolStatus
@@ -259,6 +260,227 @@ def test_persistence_failure_has_distinct_error_category() -> None:
     assert error.code == "persistence_failed"
     assert error.category.value == "persistence_error"
     assert error.retryable is True
+
+
+def test_persistence_tracker_reports_partial_failure() -> None:
+    tracker = PersistenceTracker()
+
+    saved = tracker.attempt("saved_operation", lambda: "row-id")
+
+    def fail() -> None:
+        raise SupabaseError("storage unavailable")
+
+    failed = tracker.attempt("failed_operation", fail)
+    report = tracker.report()
+
+    assert saved == "row-id"
+    assert failed is None
+    assert report.status == "partial"
+    assert report.error_code == "persistence_partial_failure"
+    assert report.retryable is True
+    assert report.failed_operations == ["failed_operation"]
+
+
+def test_analyze_returns_computed_result_when_persistence_fails(monkeypatch) -> None:
+    class FakeExecutor:
+        def execute(self, *args, **kwargs) -> ToolResult:
+            return ToolResult(
+                tool_name="finance.analyze_asset",
+                status=ToolStatus.SUCCESS,
+                policy_decision=PolicyDecision.ALLOW,
+                data={"result": analysis_result_payload(include_assessment=True)},
+            )
+
+    class FakeRepository:
+        def save_analysis(self, *args, **kwargs):
+            raise SupabaseError("storage unavailable")
+
+    user = AuthenticatedUser(
+        UUID("11111111-1111-1111-1111-111111111111"),
+        "user@example.com",
+        "token",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr("market_lens.api.app.get_client", lambda: object())
+    monkeypatch.setattr("market_lens.api.app.get_repository", FakeRepository)
+    monkeypatch.setattr(
+        "market_lens.api.app.build_default_executor",
+        lambda **kwargs: FakeExecutor(),
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/analyze",
+            json={
+                "asset_type": "stock",
+                "code": "600519",
+                "start": "2024-01-01",
+                "end": "2026-07-15",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["result"]["code"] == "600519"
+    assert payload["analysis_id"] is None
+    assert payload["persistence"] == {
+        "status": "failed",
+        "error_code": "persistence_failed",
+        "retryable": True,
+        "failed_operations": ["analysis_result"],
+    }
+
+
+def test_chat_returns_answer_when_post_compute_persistence_fails(monkeypatch) -> None:
+    class FakeRepository:
+        def expire_stale_tool_approvals(self, *args, **kwargs):
+            return []
+
+        def ensure_chat_session(self, *args, **kwargs):
+            return {"id": "33333333-3333-3333-3333-333333333333"}
+
+        def save_analysis(self, *args, **kwargs):
+            raise SupabaseError("analysis save unavailable")
+
+        def update_chat_session(self, *args, **kwargs):
+            raise SupabaseError("session update unavailable")
+
+        def save_chat_message(self, *args, **kwargs):
+            raise SupabaseError("message save unavailable")
+
+    class FakeChatAgent:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def reply(self, **kwargs):
+            return {
+                "answer": "分析已经完成",
+                "intent": "analyze_asset",
+                "asset": {"asset_type": "stock", "code": "600519", "name": "贵州茅台"},
+                "analysis": analysis_result_payload(include_assessment=True),
+                "candidates": [],
+                "citations": [],
+            }
+
+    user = AuthenticatedUser(
+        UUID("11111111-1111-1111-1111-111111111111"),
+        "user@example.com",
+        "token",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr("market_lens.api.app.get_client", lambda: object())
+    monkeypatch.setattr("market_lens.api.app.get_repository", FakeRepository)
+    monkeypatch.setattr("market_lens.api.app.ChatAgent", FakeChatAgent)
+    monkeypatch.setattr(
+        "market_lens.api.app.build_default_executor",
+        lambda **kwargs: object(),
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/chat",
+            json={
+                "message": "分析贵州茅台",
+                "start": "2024-01-01",
+                "end": "2026-07-15",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"] == "分析已经完成"
+    assert payload["analysis"]["code"] == "600519"
+    assert payload["persistence"]["status"] == "failed"
+    assert payload["persistence"]["failed_operations"] == [
+        "chat_analysis",
+        "chat_session_context",
+        "chat_user_message",
+        "chat_assistant_message",
+    ]
+
+
+def test_chat_stream_continues_after_post_compute_persistence_fails(monkeypatch) -> None:
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.message_calls = 0
+
+        def expire_stale_tool_approvals(self, *args, **kwargs):
+            return []
+
+        def ensure_chat_session(self, *args, **kwargs):
+            return {"id": "33333333-3333-3333-3333-333333333333"}
+
+        def save_analysis(self, *args, **kwargs):
+            raise SupabaseError("analysis save unavailable")
+
+        def update_chat_session(self, *args, **kwargs):
+            raise SupabaseError("session update unavailable")
+
+        def save_chat_message(self, *args, **kwargs):
+            self.message_calls += 1
+            if self.message_calls > 1:
+                raise SupabaseError("assistant save unavailable")
+            return {"id": "message-id"}
+
+    class FakeChatAgent:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def stream_reply(self, **kwargs):
+            yield {
+                "type": "meta",
+                "intent": "analyze_asset",
+                "asset": {"asset_type": "stock", "code": "600519", "name": "贵州茅台"},
+                "analysis": analysis_result_payload(include_assessment=True),
+                "candidates": [],
+                "citations": [],
+            }
+            yield {"type": "token", "delta": "分析已经完成"}
+            yield {"type": "done"}
+
+    repository = FakeRepository()
+    user = AuthenticatedUser(
+        UUID("11111111-1111-1111-1111-111111111111"),
+        "user@example.com",
+        "token",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr("market_lens.api.app.get_client", lambda: object())
+    monkeypatch.setattr("market_lens.api.app.get_repository", lambda: repository)
+    monkeypatch.setattr("market_lens.api.app.ChatAgent", FakeChatAgent)
+    monkeypatch.setattr(
+        "market_lens.api.app.build_default_executor",
+        lambda **kwargs: object(),
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/chat/stream",
+            json={
+                "message": "分析贵州茅台",
+                "start": "2024-01-01",
+                "end": "2026-07-15",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert [event["type"] for event in events] == ["meta", "token", "done"]
+    assert events[0]["analysis"]["code"] == "600519"
+    assert events[1]["delta"] == "分析已经完成"
+    assert events[2]["persistence"]["status"] == "failed"
+    assert events[2]["persistence"]["failed_operations"] == [
+        "chat_analysis",
+        "chat_session_context",
+        "chat_assistant_message",
+    ]
 
 
 def test_approval_event_persists_checkpoint_without_exposing_it() -> None:

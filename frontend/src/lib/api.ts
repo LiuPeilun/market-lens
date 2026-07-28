@@ -39,6 +39,19 @@ export interface AnalyzeRequest {
   end?: string
 }
 
+export interface PersistenceStatus {
+  status: 'saved' | 'partial' | 'failed' | 'not_attempted'
+  error_code: 'persistence_partial_failure' | 'persistence_failed' | null
+  retryable: boolean
+  failed_operations: string[]
+}
+
+export interface AnalyzeResponse {
+  result: AnalysisResult
+  analysis_id: string | null
+  persistence: PersistenceStatus
+}
+
 export interface ChatAssetContext {
   asset_type: AssetType
   code: string
@@ -61,6 +74,7 @@ export interface ChatResponse {
   candidates: AssetSearchResult[]
   citations: string[]
   session_id: string | null
+  persistence: PersistenceStatus
 }
 
 export interface ToolApproval {
@@ -92,6 +106,7 @@ export type ChatStreamEvent =
       candidates: AssetSearchResult[]
       citations: string[]
       session_id?: string
+      persistence?: PersistenceStatus
     }
   | ({ type: 'progress' } & ChatProgressStep)
   | { type: 'token'; delta: string }
@@ -102,7 +117,7 @@ export type ChatStreamEvent =
       citations: string[]
       session_id: string
     }
-  | { type: 'done'; session_id?: string }
+  | { type: 'done'; session_id?: string; persistence?: PersistenceStatus }
   | {
       type: 'error'
       message: string
@@ -355,10 +370,10 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function analyzeAsset(payload: AnalyzeRequest) {
-  return requestJson<{ result: AnalysisResult }>('/api/analyze', {
+  return requestJson<AnalyzeResponse>('/api/analyze', {
     body: JSON.stringify(payload),
     method: 'POST',
-  }).then((data) => data.result)
+  })
 }
 
 export function chatWithAgent(payload: ChatRequest) {

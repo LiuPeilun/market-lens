@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
@@ -25,6 +26,7 @@ from market_lens.api.errors import (
     http_status_for_error,
     internal_error,
 )
+from market_lens.api.persistence import PersistenceTracker
 from market_lens.api.schemas import (
     AnalysisHistoryResponse,
     AnalyzeRequest,
@@ -338,18 +340,21 @@ def analyze(
         result = tool_data["result"]
     except ToolInvocationError as exc:
         raise error_from_tool_invocation(exc) from exc
-    try:
-        row = repository.save_analysis(
+    persistence = PersistenceTracker()
+    row = persistence.attempt(
+        "analysis_result",
+        lambda: repository.save_analysis(
             user,
             request_params=jsonable_encoder(request.model_dump()),
             result=jsonable_encoder(result),
-        )
-    except SupabaseError as exc:
-        raise PersistenceFailure(
-            "analysis_persistence_failed",
-            str(exc),
-        ) from exc
-    return AnalyzeResponse(result=result, analysis_id=row.get("id"))
+        ),
+    )
+    analysis_id = row.get("id") if row is not None else None
+    return AnalyzeResponse(
+        result=result,
+        analysis_id=analysis_id,
+        persistence=persistence.report(),
+    )
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -394,16 +399,34 @@ def chat(
             start=request.start,
             end=request.end or date.today(),
         )
-        analysis_id = save_chat_analysis(repository, user, request, result.get("analysis"))
-        repository.update_chat_session(user, session_id, result.get("asset"))
-        repository.save_chat_message(user, session_id, "user", request.message)
-        repository.save_chat_message(
-            user,
-            session_id,
-            "assistant",
-            result["answer"],
-            citations=result.get("citations"),
-            analysis_run_id=analysis_id,
+        persistence = PersistenceTracker()
+        analysis_id = persistence.attempt(
+            "chat_analysis",
+            lambda: save_chat_analysis(repository, user, request, result.get("analysis")),
+        )
+        persistence.attempt(
+            "chat_session_context",
+            lambda: repository.update_chat_session(user, session_id, result.get("asset")),
+        )
+        persistence.attempt(
+            "chat_user_message",
+            lambda: repository.save_chat_message(
+                user,
+                session_id,
+                "user",
+                request.message,
+            ),
+        )
+        persistence.attempt(
+            "chat_assistant_message",
+            lambda: repository.save_chat_message(
+                user,
+                session_id,
+                "assistant",
+                result["answer"],
+                citations=result.get("citations"),
+                analysis_run_id=analysis_id,
+            ),
         )
     except (ToolInvocationError, ValueError, EastmoneyError) as exc:
         raise classify_api_error(exc) from exc
@@ -412,7 +435,11 @@ def chat(
             "chat_persistence_failed",
             str(exc),
         ) from exc
-    return ChatResponse(**result, session_id=session_id)
+    return ChatResponse(
+        **result,
+        session_id=session_id,
+        persistence=persistence.report(),
+    )
 
 
 @app.post("/api/chat/stream")
@@ -463,6 +490,7 @@ def chat_stream(
         answer_parts: list[str] = []
         citations: list[str] = []
         analysis_id: str | None = None
+        persistence = PersistenceTracker()
         try:
             for event in agent.stream_reply(
                 message=request.message,
@@ -472,14 +500,30 @@ def chat_stream(
             ):
                 if event.get("type") == "meta":
                     citations = event.get("citations") or []
-                    analysis_id = save_chat_analysis(
-                        repository,
-                        user,
-                        request,
-                        event.get("analysis"),
+                    event_analysis = event.get("analysis")
+                    if event_analysis is not None:
+                        analysis_id = persistence.attempt(
+                            "chat_analysis",
+                            partial(
+                                save_chat_analysis,
+                                repository,
+                                user,
+                                request,
+                                event_analysis,
+                            ),
+                        )
+                    event_asset = event.get("asset")
+                    persistence.attempt(
+                        "chat_session_context",
+                        partial(
+                            repository.update_chat_session,
+                            user,
+                            session_id,
+                            event_asset,
+                        ),
                     )
-                    repository.update_chat_session(user, session_id, event.get("asset"))
                     event["session_id"] = str(session_id)
+                    event["persistence"] = persistence.report().model_dump(mode="json")
                 elif event.get("type") == "citations":
                     citations = event.get("citations") or citations
                 elif event.get("type") == "approval_required":
@@ -493,15 +537,23 @@ def chat_stream(
                 elif event.get("type") == "token":
                     answer_parts.append(str(event.get("delta") or ""))
                 elif event.get("type") == "done":
-                    repository.save_chat_message(
-                        user,
-                        session_id,
-                        "assistant",
-                        "".join(answer_parts),
-                        citations=citations,
-                        analysis_run_id=analysis_id,
+                    completed_answer = "".join(answer_parts)
+                    completed_citations = list(citations)
+                    completed_analysis_id = analysis_id
+                    persistence.attempt(
+                        "chat_assistant_message",
+                        partial(
+                            repository.save_chat_message,
+                            user,
+                            session_id,
+                            "assistant",
+                            completed_answer,
+                            citations=completed_citations,
+                            analysis_run_id=completed_analysis_id,
+                        ),
                     )
                     event["session_id"] = str(session_id)
+                    event["persistence"] = persistence.report().model_dump(mode="json")
                 yield to_sse_data(event)
         except Exception as exc:
             yield to_sse_data(sse_error_event(classify_api_error(exc)))

@@ -98,9 +98,20 @@ class AnalyzeRequest(BaseModel):
     end: date | None = None
 
 
+class PersistenceStatus(BaseModel):
+    status: Literal["saved", "partial", "failed", "not_attempted"] = "not_attempted"
+    error_code: Literal[
+        "persistence_partial_failure",
+        "persistence_failed",
+    ] | None = None
+    retryable: bool = False
+    failed_operations: list[str] = Field(default_factory=list)
+
+
 class AnalyzeResponse(BaseModel):
     result: AnalysisResult
     analysis_id: UUID | None = None
+    persistence: PersistenceStatus = Field(default_factory=PersistenceStatus)
 
 
 class ChatAssetContext(BaseModel):
@@ -125,6 +136,7 @@ class ChatResponse(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
     session_id: UUID | None = None
+    persistence: PersistenceStatus = Field(default_factory=PersistenceStatus)
 
 
 class AnalysisHistoryItem(FlexibleResponseModel):

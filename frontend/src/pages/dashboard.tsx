@@ -222,7 +222,7 @@ export function DashboardPage() {
     submitted?.assetType,
   ])
 
-  const result = analysisQuery.data ?? chatAnalysis ?? undefined
+  const result = analysisQuery.data?.result ?? chatAnalysis ?? undefined
   const currentAssetLabel = formatAssetLabel(
     result?.name ?? submitted?.name ?? selectedAssetName,
     result?.code ?? submitted?.code ?? code,
