@@ -4,16 +4,20 @@ import json
 from datetime import date
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 
 from market_lens.api.app import (
     app,
+    classify_api_error,
     save_tool_approval_event,
     to_sse_data,
     verify_tool_approval_signature,
 )
+from market_lens.api.auth import get_current_user
 from market_lens.api.schemas import AnalysisHistoryResponse, AnalyzeResponse, ChatResponse
-from market_lens.storage.supabase import AuthenticatedUser
+from market_lens.storage.supabase import AuthenticatedUser, SupabaseError
+from market_lens.tools.models import PolicyDecision, ToolResult, ToolStatus
 
 
 def test_to_sse_data_json_encodes_dates() -> None:
@@ -178,6 +182,83 @@ def test_analyze_requires_authentication() -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Authentication required"
+
+
+@pytest.mark.parametrize(
+    ("error_code", "error_category", "retryable", "expected_status"),
+    [
+        ("invalid_input", "invalid_request", False, 400),
+        ("market_data_upstream_unavailable", "upstream_unavailable", True, 503),
+        ("fund_nav_data_unavailable", "data_unavailable", False, 422),
+        ("tool_execution_failed", "internal_error", False, 500),
+    ],
+)
+def test_analyze_maps_tool_failures_to_stable_error_taxonomy(
+    monkeypatch,
+    error_code: str,
+    error_category: str,
+    retryable: bool,
+    expected_status: int,
+) -> None:
+    class FakeExecutor:
+        def execute(self, *args, **kwargs) -> ToolResult:
+            return ToolResult(
+                tool_name="finance.analyze_asset",
+                status=ToolStatus.ERROR,
+                policy_decision=PolicyDecision.ALLOW,
+                error_code=error_code,
+                error_category=error_category,
+                retryable=retryable,
+                message=(
+                    "private internal detail"
+                    if error_category == "internal_error"
+                    else "Public failure detail"
+                ),
+            )
+
+    user = AuthenticatedUser(
+        UUID("11111111-1111-1111-1111-111111111111"),
+        "user@example.com",
+        "token",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr("market_lens.api.app.get_client", lambda: object())
+    monkeypatch.setattr("market_lens.api.app.get_repository", lambda: object())
+    monkeypatch.setattr(
+        "market_lens.api.app.build_default_executor",
+        lambda **kwargs: FakeExecutor(),
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/analyze",
+            json={
+                "asset_type": "fund",
+                "code": "025856",
+                "start": "2024-01-01",
+                "end": "2026-07-15",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == expected_status
+    payload = response.json()
+    assert payload["code"] == error_code
+    assert payload["category"] == error_category
+    assert payload["retryable"] is retryable
+    if error_category == "internal_error":
+        assert payload["detail"] == "Market analysis failed unexpectedly"
+        assert "private" not in payload["detail"]
+    else:
+        assert payload["detail"] == "Public failure detail"
+
+
+def test_persistence_failure_has_distinct_error_category() -> None:
+    error = classify_api_error(SupabaseError("storage unavailable"))
+
+    assert error.code == "persistence_failed"
+    assert error.category.value == "persistence_error"
+    assert error.retryable is True
 
 
 def test_approval_event_persists_checkpoint_without_exposing_it() -> None:

@@ -10,6 +10,7 @@ from market_lens.capabilities.finance.schemas import (
     SearchAssetsOutput,
 )
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError
+from market_lens.errors import ErrorCategory, MarketLensError
 from market_lens.tools.executor import ToolPublicError
 from market_lens.tools.models import ExecutionTarget, ToolContext, ToolRisk, ToolSpec
 from market_lens.tools.registry import ToolRegistry
@@ -39,8 +40,13 @@ class FinanceToolHandlers:
             if args.asset_type is not None:
                 search_options["asset_type"] = args.asset_type
             rows = self.data_client.search_assets(args.keyword, **search_options)
-        except (ValueError, EastmoneyError) as exc:
-            raise ToolPublicError("market_data_error", str(exc)) from exc
+        except EastmoneyError as exc:
+            raise ToolPublicError(
+                "asset_search_upstream_unavailable",
+                str(exc),
+                category=ErrorCategory.UPSTREAM_UNAVAILABLE,
+                retryable=True,
+            ) from exc
         items = [
             {
                 "asset_type": item.asset_type,
@@ -69,8 +75,20 @@ class FinanceToolHandlers:
                 start=args.start,
                 end=args.end,
             )
-        except (ValueError, EastmoneyError) as exc:
-            raise ToolPublicError("market_analysis_error", str(exc)) from exc
+        except MarketLensError as exc:
+            raise ToolPublicError(
+                exc.code,
+                exc.message,
+                category=exc.category,
+                retryable=exc.retryable,
+            ) from exc
+        except EastmoneyError as exc:
+            raise ToolPublicError(
+                "market_data_upstream_unavailable",
+                str(exc),
+                category=ErrorCategory.UPSTREAM_UNAVAILABLE,
+                retryable=True,
+            ) from exc
         return AnalyzeAssetOutput(result=result)
 
 

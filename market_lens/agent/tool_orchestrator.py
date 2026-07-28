@@ -494,6 +494,8 @@ def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
         "status": result.status.value,
         "data": result.data,
         "error_code": result.error_code,
+        "error_category": result.error_category,
+        "retryable": result.retryable,
         "message": result.message,
     }
 

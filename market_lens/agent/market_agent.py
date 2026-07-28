@@ -11,6 +11,7 @@ from market_lens.data.eastmoney import (
     is_a_share_symbol,
     stock_bars_from_valuations,
 )
+from market_lens.errors import DataUnavailableError, InvalidRequestError
 from market_lens.types import (
     AssetSearchResult,
     FundHolding,
@@ -78,9 +79,12 @@ class MarketAnalysisAgent:
             except EastmoneyError:
                 bars = stock_bars_from_valuations(valuations)
             if not bars:
-                raise ValueError(
-                    f"No stock price data found for {code}. "
-                    "If this is a fund code, choose asset_type='fund'."
+                raise DataUnavailableError(
+                    "stock_price_data_unavailable",
+                    (
+                        f"No stock price data found for {code}. "
+                        "If this is a fund code, choose asset_type='fund'."
+                    ),
                 )
             profile = None
             financials = []
@@ -181,7 +185,10 @@ class MarketAnalysisAgent:
             if not nav_points:
                 nav_points = self.data_client.get_fund_nav(code, start=start, end=end)
             if not nav_points:
-                raise ValueError(f"No fund NAV data found for {code}.")
+                raise DataUnavailableError(
+                    "fund_nav_data_unavailable",
+                    f"No fund NAV data found for {code}.",
+                )
             fund_name = self.data_client.get_fund_name(code)
             holdings_route = None
             try:
@@ -324,7 +331,10 @@ class MarketAnalysisAgent:
                 retrieved_at=retrieved_at,
             )
             return result
-        raise ValueError("asset_type must be 'stock' or 'fund'")
+        raise InvalidRequestError(
+            "unsupported_asset_type",
+            "asset_type must be 'stock' or 'fund'",
+        )
 
     def _load_stock_detailed_financials(
         self,

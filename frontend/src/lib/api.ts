@@ -2,6 +2,36 @@ import { getAccessToken } from '@/lib/supabase'
 
 export type AssetType = 'stock' | 'fund'
 
+export type ApiErrorCategory =
+  | 'invalid_request'
+  | 'upstream_unavailable'
+  | 'data_unavailable'
+  | 'internal_error'
+  | 'persistence_error'
+
+export interface ApiErrorResponse {
+  detail: string
+  code?: string | null
+  category?: ApiErrorCategory | null
+  retryable?: boolean
+}
+
+export class ApiRequestError extends Error {
+  readonly status: number
+  readonly code: string | null
+  readonly category: ApiErrorCategory | null
+  readonly retryable: boolean
+
+  constructor(status: number, payload: ApiErrorResponse) {
+    super(payload.detail)
+    this.name = 'ApiRequestError'
+    this.status = status
+    this.code = payload.code ?? null
+    this.category = payload.category ?? null
+    this.retryable = payload.retryable ?? false
+  }
+}
+
 export interface AnalyzeRequest {
   asset_type: AssetType
   code: string
@@ -73,7 +103,13 @@ export type ChatStreamEvent =
       session_id: string
     }
   | { type: 'done'; session_id?: string }
-  | { type: 'error'; message: string }
+  | {
+      type: 'error'
+      message: string
+      code?: string
+      category?: ApiErrorCategory
+      retryable?: boolean
+    }
 
 export interface AssetSearchResult {
   asset_type: AssetType
@@ -312,8 +348,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    const message = body?.detail ?? `Request failed with ${response.status}`
-    throw new Error(message)
+    throw requestError(response.status, body)
   }
 
   return response.json() as Promise<T>
@@ -348,7 +383,7 @@ export async function streamChatWithAgent(
   })
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.detail ?? `Request failed with ${response.status}`)
+    throw requestError(response.status, body)
   }
 
   await consumeChatStream(response, onEvent)
@@ -370,7 +405,7 @@ export async function resumeToolApproval(
   })
   if (!response.ok || !response.body) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.detail ?? `Request failed with ${response.status}`)
+    throw requestError(response.status, body)
   }
 
   await consumeChatStream(response, onEvent)
@@ -409,6 +444,14 @@ async function consumeChatStream(
       .join('\n')
     if (data) onEvent(JSON.parse(data) as ChatStreamEvent)
   }
+}
+
+function requestError(status: number, body: unknown): ApiRequestError {
+  const payload =
+    body && typeof body === 'object' && 'detail' in body && typeof body.detail === 'string'
+      ? (body as ApiErrorResponse)
+      : { detail: `Request failed with ${status}` }
+  return new ApiRequestError(status, payload)
 }
 
 export function searchAssets(keyword: string, assetType?: AssetType, limit = 10) {

@@ -163,3 +163,12 @@ class AssetSearchResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+    code: str | None = None
+    category: Literal[
+        "invalid_request",
+        "upstream_unavailable",
+        "data_unavailable",
+        "internal_error",
+        "persistence_error",
+    ] | None = None
+    retryable: bool = False

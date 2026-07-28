@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from datetime import date
 from time import sleep
 from typing import Any
 from uuid import UUID
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from market_lens.tools.executor import ToolExecutor, ToolPublicError, tool_arguments_digest
+from market_lens.capabilities.finance.schemas import AnalyzeAssetInput, SearchAssetsInput
+from market_lens.capabilities.finance.tools import FinanceToolHandlers
+from market_lens.data.eastmoney import EastmoneyError
+from market_lens.errors import DataUnavailableError
+from market_lens.tools.executor import (
+    ToolExecutor,
+    ToolInvocationError,
+    ToolPublicError,
+    require_tool_data,
+    tool_arguments_digest,
+)
 from market_lens.tools.models import (
     ExecutionTarget,
     PolicyDecision,
@@ -205,14 +216,93 @@ def test_executor_hides_unexpected_exception_details() -> None:
 def test_executor_preserves_explicit_public_errors() -> None:
     def public_failure(raw_input: BaseModel, context: ToolContext) -> EchoOutput:
         del raw_input, context
-        raise ToolPublicError("upstream_unavailable", "Data source is unavailable")
+        raise ToolPublicError(
+            "upstream_unavailable",
+            "Data source is unavailable",
+            category="upstream_unavailable",
+            retryable=True,
+        )
 
     result = ToolExecutor(
         ToolRegistry([make_spec(handler=public_failure)])
     ).execute("test.echo", {"value": "hello"})
 
     assert result.error_code == "upstream_unavailable"
+    assert result.error_category == "upstream_unavailable"
+    assert result.retryable is True
     assert result.message == "Data source is unavailable"
+
+
+def test_tool_invocation_error_is_not_a_value_error() -> None:
+    result = ToolExecutor(ToolRegistry([make_spec()])).execute("test.echo", {})
+
+    with pytest.raises(ToolInvocationError) as caught:
+        require_tool_data(result)
+
+    assert not isinstance(caught.value, ValueError)
+    assert caught.value.result.error_category == "invalid_request"
+
+
+def test_finance_analysis_preserves_data_unavailable_category() -> None:
+    class AnalysisAgent:
+        def analyze(self, **kwargs):
+            raise DataUnavailableError(
+                "fund_nav_data_unavailable",
+                "No verified NAV data is available",
+            )
+
+    handlers = FinanceToolHandlers(object(), AnalysisAgent())  # type: ignore[arg-type]
+
+    with pytest.raises(ToolPublicError) as caught:
+        handlers.analyze_asset(
+            AnalyzeAssetInput(
+                asset_type="fund",
+                code="025856",
+                start=date(2024, 1, 1),
+                end=date(2026, 7, 15),
+            ),
+            ToolContext(),
+        )
+
+    assert caught.value.code == "fund_nav_data_unavailable"
+    assert caught.value.category == "data_unavailable"
+    assert caught.value.retryable is False
+
+
+def test_finance_analysis_input_normalizes_code_and_rejects_reversed_dates() -> None:
+    valid = AnalyzeAssetInput(
+        asset_type="stock",
+        code=" 600519 ",
+        start=date(2024, 1, 1),
+        end=date(2026, 7, 15),
+    )
+
+    assert valid.code == "600519"
+    with pytest.raises(ValidationError, match="start must be on or before end"):
+        AnalyzeAssetInput(
+            asset_type="stock",
+            code="600519",
+            start=date(2026, 7, 15),
+            end=date(2024, 1, 1),
+        )
+
+
+def test_finance_search_classifies_upstream_failure_as_retryable() -> None:
+    class DataClient:
+        def search_assets(self, *args, **kwargs):
+            raise EastmoneyError("upstream disconnected")
+
+    handlers = FinanceToolHandlers(DataClient(), object())  # type: ignore[arg-type]
+
+    with pytest.raises(ToolPublicError) as caught:
+        handlers.search_assets(
+            SearchAssetsInput(keyword="华夏", limit=5),
+            ToolContext(),
+        )
+
+    assert caught.value.code == "asset_search_upstream_unavailable"
+    assert caught.value.category == "upstream_unavailable"
+    assert caught.value.retryable is True
 
 
 class FakeAuditRecorder:

@@ -27,13 +27,22 @@ logger = logging.getLogger(__name__)
 
 
 class ToolPublicError(RuntimeError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        category: str | None = None,
+        retryable: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.category = category
+        self.retryable = retryable
 
 
-class ToolInvocationError(ValueError):
+class ToolInvocationError(RuntimeError):
     def __init__(self, result: ToolResult) -> None:
         super().__init__(result.message or "Tool invocation failed")
         self.result = result
@@ -107,6 +116,7 @@ class ToolExecutor:
                 status=ToolStatus.ERROR,
                 policy_decision=PolicyDecision.DENY,
                 error_code="invalid_input",
+                error_category="invalid_request",
                 message="Tool input validation failed",
                 duration_ms=_duration_ms(started),
             )
@@ -173,6 +183,7 @@ class ToolExecutor:
                 status=ToolStatus.ERROR,
                 policy_decision=PolicyDecision.ALLOW,
                 error_code="tool_timeout",
+                retryable=True,
                 message="Tool execution exceeded its time limit",
                 duration_ms=_duration_ms(started),
             )
@@ -182,6 +193,8 @@ class ToolExecutor:
                 status=ToolStatus.ERROR,
                 policy_decision=PolicyDecision.ALLOW,
                 error_code=exc.code,
+                error_category=exc.category,
+                retryable=exc.retryable,
                 message=exc.message,
                 duration_ms=_duration_ms(started),
             )
@@ -192,6 +205,7 @@ class ToolExecutor:
                 status=ToolStatus.ERROR,
                 policy_decision=PolicyDecision.ALLOW,
                 error_code="invalid_output",
+                error_category="internal_error",
                 message="Tool returned an invalid result",
                 duration_ms=_duration_ms(started),
             )
@@ -202,6 +216,7 @@ class ToolExecutor:
                 status=ToolStatus.ERROR,
                 policy_decision=PolicyDecision.ALLOW,
                 error_code="tool_execution_failed",
+                error_category="internal_error",
                 message="Tool execution failed",
                 duration_ms=_duration_ms(started),
             )

@@ -33,6 +33,27 @@ Historical records created before this contract remain readable because the new
 fields are optional at the API schema boundary. New analysis results must always
 populate them.
 
+## Stable Error Taxonomy
+
+Analysis transport failures use a separate stable contract:
+
+| Category | HTTP | Retryable | Meaning |
+| --- | ---: | --- | --- |
+| `invalid_request` | 400 | No | The code, asset type, date range, or other user input is invalid |
+| `upstream_unavailable` | 503 | Yes | A required market-data source disconnected, timed out, or returned an unusable response |
+| `data_unavailable` | 422 | No | The request is valid, but no verified dataset can support an assessment |
+| `internal_error` | 500 | No | An unexpected application or tool-output failure occurred |
+| `persistence_error` | 502 | Yes | Supabase could not save or load application state |
+
+JSON errors retain the existing string `detail` field and add stable `code`,
+`category`, and `retryable` fields. SSE error events expose the same metadata with
+`message` in place of `detail`. Internal exception details are logged and replaced
+with a fixed public message.
+
+`ToolInvocationError` is a runtime execution failure, not a `ValueError`. Tool
+results preserve error category and retryability through the finance capability,
+API, SSE, LLM tool payload, and frontend `ApiRequestError`.
+
 ### Status Semantics
 
 | Status | Rule |
@@ -72,7 +93,7 @@ Priority definitions:
 | ST-04 | P1 | `MarketAnalysisAgent.analyze`, fund name load | Name lookup is unguarded after NAV succeeds | Preserve code-based analysis and mark name source unavailable |
 | ST-05 | P1 | REIT profile resolution | Product classification can select REIT, then profile loading can abort | Return a REIT `unavailable` assessment with source diagnostics |
 | ST-06 | P1 | Index price fallback discovery | `find_index_for_fund` can fail while attempting the final proxy | Isolate discovery and retain the existing holdings result |
-| ST-07 | P0 | `/api/analyze` tool boundary | All `ToolInvocationError` values are caught as `ValueError` and returned as HTTP 400, including upstream failures and timeouts | Introduce stable error taxonomy; reserve 400 for invalid input |
+| ST-07 | P0 (resolved) | `/api/analyze` tool boundary | Tool failures retain stable category and retryability; only invalid requests map to HTTP 400 | Keep category mappings covered by API and tool-boundary regression tests |
 | ST-08 | P0 | `/api/analyze` persistence | Supabase save failure returns HTTP 502 after a valid analysis was already computed | Return the analysis with `analysis_id=null`; report persistence separately |
 | ST-09 | P0 | Chat analysis tool call | Any finance tool error terminates the chat preparation path | Return and explain the structured degraded/unavailable assessment |
 | ST-10 | P0 | Finance tool executor | The entire analysis has one 90-second timeout and discards late partial work | Add bounded stage budgets and persist usable intermediate snapshots |
@@ -99,12 +120,11 @@ not the first interruption targets.
 
 After this contract and audit:
 
-1. Add stable analysis error categories and stop mapping upstream failures to HTTP 400.
-2. Make analysis persistence non-blocking for an already computed result.
-3. Add validated last-known-good snapshots with source identity and age limits.
-4. Implement stock, fund, and index deterministic fallback matrices.
-5. Return structured unavailable results for terminal no-data cases.
-6. Render complete, degraded, stale, and unavailable states in the frontend.
-7. Add outage, malformed response, route mismatch, future-data, and timeout tests.
+1. Make analysis persistence non-blocking for an already computed result.
+2. Add validated last-known-good snapshots with source identity and age limits.
+3. Implement stock, fund, and index deterministic fallback matrices.
+4. Return structured unavailable results for terminal no-data cases.
+5. Render complete, degraded, stale, and unavailable states in the frontend.
+6. Add outage, malformed response, route mismatch, future-data, and timeout tests.
 
 Strategy factors and weights remain frozen until these stability gates pass.

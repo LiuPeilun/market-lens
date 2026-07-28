@@ -74,6 +74,8 @@ class ToolResult(BaseModel):
     data: dict[str, Any] | None = None
     citations: list[str] = Field(default_factory=list)
     error_code: str | None = None
+    error_category: str | None = None
+    retryable: bool = False
     message: str | None = None
     duration_ms: int = 0
 

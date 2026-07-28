@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from market_lens.tools.models import ToolInput, ToolOutput
 
@@ -39,17 +39,25 @@ class SearchAssetsOutput(ToolOutput):
 
 class AnalyzeAssetInput(ToolInput):
     asset_type: Literal["stock", "fund"]
-    code: str = Field(min_length=1, max_length=32)
+    code: str = Field(pattern=r"^\d{6}$")
     start: date
     end: date
 
-    @field_validator("code")
+    @field_validator("code", mode="before")
     @classmethod
-    def normalize_code(cls, value: str) -> str:
+    def normalize_code(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
         normalized = value.strip()
         if not normalized:
             raise ValueError("code must not be blank")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> AnalyzeAssetInput:
+        if self.start > self.end:
+            raise ValueError("start must be on or before end")
+        return self
 
 
 class AnalyzeAssetOutput(ToolOutput):

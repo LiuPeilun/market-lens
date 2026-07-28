@@ -11,14 +11,20 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from market_lens import __version__
 from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext
 from market_lens.agent.market_agent import MarketAnalysisAgent
 from market_lens.api.auth import get_current_user
+from market_lens.api.errors import (
+    error_from_tool_invocation,
+    error_response_content,
+    http_status_for_error,
+    internal_error,
+)
 from market_lens.api.schemas import (
     AnalysisHistoryResponse,
     AnalyzeRequest,
@@ -31,6 +37,12 @@ from market_lens.api.schemas import (
 from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
+from market_lens.errors import (
+    InvalidRequestError,
+    MarketLensError,
+    PersistenceFailure,
+    UpstreamUnavailableError,
+)
 from market_lens.mcp.factory import build_mcp_gateway
 from market_lens.sandbox.factory import build_sandbox_runner
 from market_lens.storage.supabase import (
@@ -41,7 +53,7 @@ from market_lens.storage.supabase import (
 from market_lens.storage.tool_audit import SupabaseToolAuditRecorder
 from market_lens.storage.workspace import SupabaseWorkspaceStore
 from market_lens.tools.catalog import build_default_executor
-from market_lens.tools.executor import require_tool_data
+from market_lens.tools.executor import ToolInvocationError, require_tool_data
 from market_lens.tools.models import ToolApprovalGrant, ToolContext
 from market_lens.valuation.metrics import fund_performance_index
 
@@ -86,6 +98,33 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(MarketLensError)
+async def handle_market_lens_error(
+    request: Request,
+    exc: MarketLensError,
+) -> JSONResponse:
+    del request
+    return JSONResponse(
+        status_code=http_status_for_error(exc),
+        content=error_response_content(exc),
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Unhandled API error method=%s path=%s",
+        request.method,
+        request.url.path,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    error = internal_error()
+    return JSONResponse(
+        status_code=http_status_for_error(error),
+        content=error_response_content(error),
+    )
+
+
 def get_client() -> EastmoneyClient:
     return EastmoneyClient()
 
@@ -97,6 +136,38 @@ def get_repository() -> SupabaseRepository:
 def to_sse_data(event: dict[str, Any]) -> str:
     payload = jsonable_encoder(event)
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def classify_api_error(exc: Exception) -> MarketLensError:
+    if isinstance(exc, MarketLensError):
+        return exc
+    if isinstance(exc, ToolInvocationError):
+        return error_from_tool_invocation(exc)
+    if isinstance(exc, EastmoneyError):
+        return UpstreamUnavailableError(
+            "market_data_upstream_unavailable",
+            str(exc),
+        )
+    if isinstance(exc, SupabaseError):
+        return PersistenceFailure(
+            "persistence_failed",
+            str(exc),
+        )
+    if isinstance(exc, ValueError):
+        return InvalidRequestError(
+            "invalid_request",
+            str(exc),
+        )
+    return internal_error()
+
+
+def sse_error_event(exc: MarketLensError) -> dict[str, Any]:
+    content = error_response_content(exc)
+    return {
+        "type": "error",
+        "message": content.pop("detail"),
+        **content,
+    }
 
 
 @app.get("/health")
@@ -148,7 +219,7 @@ def stock_history(
             )
         stock_name = next((item.name for item in reversed(valuations) if item.name), None)
     except (ValueError, EastmoneyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise classify_api_error(exc) from exc
     return {
         "symbol": symbol,
         "name": stock_name,
@@ -163,7 +234,7 @@ def stock_valuation(symbol: str) -> dict[str, object]:
     try:
         rows = client.get_stock_valuation(symbol)
     except (ValueError, EastmoneyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise classify_api_error(exc) from exc
     stock_name = next((item.name for item in reversed(rows) if item.name), None)
     return {
         "symbol": symbol,
@@ -190,7 +261,7 @@ def fund_nav(
             rows = client.get_fund_nav(code, start=start, end=end or date.today())
         fund_name = client.get_fund_name(code)
     except (ValueError, EastmoneyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise classify_api_error(exc) from exc
     performance_by_date = dict(fund_performance_index(rows))
     items = []
     for item in rows:
@@ -232,8 +303,8 @@ def search_assets(
                 {"keyword": keyword, "asset_type": asset_type, "limit": limit},
             )
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ToolInvocationError as exc:
+        raise error_from_tool_invocation(exc) from exc
     return AssetSearchResponse.model_validate(tool_data)
 
 
@@ -265,8 +336,8 @@ def analyze(
             )
         )
         result = tool_data["result"]
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ToolInvocationError as exc:
+        raise error_from_tool_invocation(exc) from exc
     try:
         row = repository.save_analysis(
             user,
@@ -274,7 +345,10 @@ def analyze(
             result=jsonable_encoder(result),
         )
     except SupabaseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise PersistenceFailure(
+            "analysis_persistence_failed",
+            str(exc),
+        ) from exc
     return AnalyzeResponse(result=result, analysis_id=row.get("id"))
 
 
@@ -331,10 +405,13 @@ def chat(
             citations=result.get("citations"),
             analysis_run_id=analysis_id,
         )
-    except (ValueError, EastmoneyError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ToolInvocationError, ValueError, EastmoneyError) as exc:
+        raise classify_api_error(exc) from exc
     except SupabaseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise PersistenceFailure(
+            "chat_persistence_failed",
+            str(exc),
+        ) from exc
     return ChatResponse(**result, session_id=session_id)
 
 
@@ -377,7 +454,10 @@ def chat_stream(
         )
         repository.save_chat_message(user, session_id, "user", request.message)
     except SupabaseError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise PersistenceFailure(
+            "chat_persistence_failed",
+            str(exc),
+        ) from exc
 
     def event_stream():
         answer_parts: list[str] = []
@@ -423,12 +503,8 @@ def chat_stream(
                     )
                     event["session_id"] = str(session_id)
                 yield to_sse_data(event)
-        except (ValueError, EastmoneyError) as exc:
-            payload = {"type": "error", "message": str(exc)}
-            yield to_sse_data(payload)
         except Exception as exc:
-            payload = {"type": "error", "message": f"Chat stream failed: {exc}"}
-            yield to_sse_data(payload)
+            yield to_sse_data(sse_error_event(classify_api_error(exc)))
 
     return StreamingResponse(
         event_stream(),
