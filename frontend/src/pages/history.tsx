@@ -16,6 +16,11 @@ import {
   getChatMessageHistory,
   getChatSessionHistory,
 } from '@/lib/api'
+import {
+  type AnalysisStatus,
+  analysisStatus,
+  analysisStatusLabel,
+} from '@/lib/analysis-status'
 import { formatNumber, formatPercent } from '@/lib/format'
 
 export function HistoryPage() {
@@ -88,6 +93,7 @@ export function HistoryPage() {
                       <TableHead>时间</TableHead>
                       <TableHead>标的</TableHead>
                       <TableHead>类型</TableHead>
+                      <TableHead>状态</TableHead>
                       <TableHead>估值位置</TableHead>
                       <TableHead>质量</TableHead>
                       <TableHead>产品质量</TableHead>
@@ -100,6 +106,7 @@ export function HistoryPage() {
                       const valuation = dimensions?.valuation
                       const quality = dimensions?.quality
                       const product = dimensions?.product
+                      const status = analysisStatus(item.result)
                       return (
                         <TableRow key={item.id}>
                           <TableCell>{formatDateTime(item.created_at)}</TableCell>
@@ -110,6 +117,11 @@ export function HistoryPage() {
                           <TableCell>
                             <Badge variant="outline">
                               {item.asset_type === 'stock' ? '股票' : '基金'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={historyStatusVariant(status)}>
+                              {analysisStatusLabel(status)}
                             </Badge>
                           </TableCell>
                           <TableCell>
@@ -136,7 +148,7 @@ export function HistoryPage() {
                     })}
                     {!analyses.data?.items.length ? (
                       <TableRow>
-                        <TableCell className="h-24 text-center text-muted-foreground" colSpan={7}>
+                        <TableCell className="h-24 text-center text-muted-foreground" colSpan={8}>
                           还没有分析记录。
                         </TableCell>
                       </TableRow>
@@ -208,6 +220,13 @@ export function HistoryPage() {
       </Tabs>
     </main>
   )
+}
+
+function historyStatusVariant(status: AnalysisStatus | null) {
+  if (status === 'complete') return 'secondary' as const
+  if (status === 'degraded') return 'warning' as const
+  if (status === 'unavailable') return 'destructive' as const
+  return 'outline' as const
 }
 
 function DimensionCell({

@@ -52,6 +52,7 @@ import {
   type AnalysisResult,
   type ChatProgressStep,
   type ChatStreamEvent,
+  type PersistenceStatus,
   type ToolApproval,
   analyzeAsset,
   getFundNav,
@@ -62,6 +63,14 @@ import {
   resumeToolApproval,
   streamChatWithAgent,
 } from '@/lib/api'
+import {
+  analysisStatus,
+  analysisStatusDescription,
+  analysisStatusLabel,
+  assessmentMethodLabel,
+  fallbackReasonLabel,
+  persistenceMessage,
+} from '@/lib/analysis-status'
 import { useAuth } from '@/lib/auth-context'
 import { formatLabel, formatNumber, formatPercent, formatRatioPercentile } from '@/lib/format'
 
@@ -116,6 +125,7 @@ export function DashboardPage() {
   ])
   const [isChatBusy, setIsChatBusy] = useState(false)
   const [chatAnalysis, setChatAnalysis] = useState<AnalysisResult | null>(null)
+  const [chatPersistence, setChatPersistence] = useState<PersistenceStatus | null>(null)
   const [chatSessionId, setChatSessionId] = useState<string | null>(null)
   const trimmedCode = code.trim()
 
@@ -223,6 +233,7 @@ export function DashboardPage() {
   ])
 
   const result = analysisQuery.data?.result ?? chatAnalysis ?? undefined
+  const persistence = analysisQuery.data?.persistence ?? chatPersistence
   const currentAssetLabel = formatAssetLabel(
     result?.name ?? submitted?.name ?? selectedAssetName,
     result?.code ?? submitted?.code ?? code,
@@ -233,12 +244,20 @@ export function DashboardPage() {
     stockHistoryQuery.isFetching ||
     stockValuationQuery.isFetching ||
     fundNavQuery.isFetching
-  const queryError =
-    analysisQuery.error ??
-    stockHistoryQuery.error ??
-    stockValuationQuery.error ??
-    fundNavQuery.error
-  const errorMessage = submitError ?? queryError?.message
+  const isAnalysisLoading =
+    isResolving || Boolean(submitted && analysisQuery.isPending && !analysisQuery.data)
+  const chartQuery =
+    (submitted?.assetType ?? assetType) === 'stock' ? stockHistoryQuery : fundNavQuery
+  const isChartLoading = Boolean(submitted) && chartQuery.isFetching && !chartQuery.data
+  const chartHasData =
+    (submitted?.assetType ?? assetType) === 'stock'
+      ? Boolean(stockHistoryQuery.data?.items.length)
+      : Boolean(fundNavQuery.data?.items.length)
+  const auxiliaryError =
+    (submitted?.assetType ?? assetType) === 'stock'
+      ? stockHistoryQuery.error ?? stockValuationQuery.error
+      : fundNavQuery.error
+  const errorMessage = submitError ?? analysisQuery.error?.message
   const searchResults = searchQuery.data?.items ?? []
 
   async function submitForm(event: React.FormEvent<HTMLFormElement>) {
@@ -255,6 +274,7 @@ export function DashboardPage() {
       setAssetType(submittedAssetType)
       setSelectedAssetName(null)
       setChatAnalysis(null)
+      setChatPersistence(null)
       setSubmitted({
         assetType: submittedAssetType,
         code: normalizedInput,
@@ -293,6 +313,7 @@ export function DashboardPage() {
     setSelectedAssetName(null)
     setSubmitError(null)
     setChatAnalysis(null)
+    setChatPersistence(null)
     setEnd('')
   }
 
@@ -302,6 +323,7 @@ export function DashboardPage() {
     setSelectedAssetName(candidate.name)
     setSubmitError(null)
     setChatAnalysis(null)
+    setChatPersistence(null)
     if (options?.submit) {
       setSubmitted({
         assetType: candidate.asset_type,
@@ -333,6 +355,7 @@ export function DashboardPage() {
       )
     } else if (event.type === 'meta') {
       if (event.session_id) setChatSessionId(event.session_id)
+      if (event.persistence) setChatPersistence(event.persistence)
       setChatMessages((items) =>
         items.map((item) =>
           item.id === assistantMessageId ? { ...item, citations: event.citations } : item,
@@ -394,6 +417,7 @@ export function DashboardPage() {
       )
     } else if (event.type === 'done') {
       if (event.session_id) setChatSessionId(event.session_id)
+      if (event.persistence) setChatPersistence(event.persistence)
       setChatMessages((items) =>
         items.map((item) =>
           item.id === assistantMessageId
@@ -533,6 +557,7 @@ export function DashboardPage() {
 
   function startNewChat() {
     setChatSessionId(null)
+    setChatPersistence(null)
     setChatMessages([
       {
         id: crypto.randomUUID(),
@@ -540,6 +565,23 @@ export function DashboardPage() {
         content: '已开始新对话，可以询问另一只基金或股票。',
       },
     ])
+  }
+
+  function retryCurrentAnalysis() {
+    setSubmitError(null)
+    if (submitted) {
+      setSubmitted({ ...submitted, requestId: crypto.randomUUID() })
+      return
+    }
+    if (!result) return
+    setSubmitted({
+      assetType: result.asset_type,
+      code: result.code,
+      end: end || undefined,
+      name: result.name ?? undefined,
+      requestId: crypto.randomUUID(),
+      start,
+    })
   }
 
   return (
@@ -682,13 +724,57 @@ export function DashboardPage() {
         <div className="grid gap-6">
           {errorMessage ? (
             <Alert className="border-destructive/30">
-              <AlertTitle>请求失败</AlertTitle>
-              <AlertDescription>{errorMessage}</AlertDescription>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <AlertTitle>分析请求失败</AlertTitle>
+                  <AlertDescription>{errorMessage}</AlertDescription>
+                </div>
+                <Button
+                  disabled={!submitted || analysisQuery.isFetching}
+                  onClick={retryCurrentAnalysis}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RotateCcw className={analysisQuery.isFetching ? 'size-4 animate-spin' : 'size-4'} />
+                  重试
+                </Button>
+              </div>
             </Alert>
           ) : null}
 
-          <MetricGrid isBusy={isBusy} result={result} />
-          <AssessmentOverview isBusy={isBusy} result={result} />
+          {result && auxiliaryError ? (
+            <Alert className="border-accent/40 bg-accent/5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <AlertTitle>部分行情数据加载失败</AlertTitle>
+                  <AlertDescription>
+                    核心分析结果已保留。走势图或明细表可能暂时不完整：
+                    {auxiliaryError.message}
+                  </AlertDescription>
+                </div>
+                <Button
+                  disabled={isBusy}
+                  onClick={retryCurrentAnalysis}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RotateCcw className={isBusy ? 'size-4 animate-spin' : 'size-4'} />
+                  重试数据
+                </Button>
+              </div>
+            </Alert>
+          ) : null}
+
+          <AnalysisStatusPanel
+            isBusy={isAnalysisLoading}
+            isRetrying={analysisQuery.isFetching}
+            onRetry={retryCurrentAnalysis}
+            persistence={persistence}
+            result={result}
+          />
+
+          <MetricGrid isBusy={isAnalysisLoading} result={result} />
+          <AssessmentOverview isBusy={isAnalysisLoading} result={result} />
 
           <Card>
             <CardHeader className="flex-row items-center justify-between gap-3 max-sm:flex-col max-sm:items-start">
@@ -720,13 +806,19 @@ export function DashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="h-[420px]">
-                {isBusy ? (
+                {isChartLoading ? (
                   <Skeleton className="h-full w-full" />
-                ) : (
+                ) : chartHasData ? (
                   <ReactECharts
                     notMerge
                     option={chartOption}
                     style={{ height: '100%', width: '100%' }}
+                  />
+                ) : (
+                  <EmptyChartState
+                    hasError={Boolean(chartQuery.error)}
+                    isRetrying={chartQuery.isFetching}
+                    onRetry={retryCurrentAnalysis}
                   />
                 )}
               </div>
@@ -1016,6 +1108,140 @@ function shouldSearchByKeyword(keyword: string) {
 function findBestSearchResult(keyword: string, items: AssetSearchResult[]) {
   const value = keyword.trim()
   return items.find((item) => item.code === value || item.name === value) ?? items[0]
+}
+
+function AnalysisStatusPanel({
+  isBusy,
+  isRetrying,
+  onRetry,
+  persistence,
+  result,
+}: {
+  isBusy: boolean
+  isRetrying: boolean
+  onRetry: () => void
+  persistence: PersistenceStatus | null | undefined
+  result: AnalysisResult | undefined
+}) {
+  if (!result && !isBusy) return null
+  if (!result) {
+    return (
+      <Alert className="border-border">
+        <div className="flex items-center gap-3">
+          <LoaderCircle className="size-5 animate-spin text-primary" />
+          <div className="flex-1">
+            <AlertTitle>正在分析</AlertTitle>
+            <AlertDescription>正在验证市场数据并执行估值路径。</AlertDescription>
+          </div>
+        </div>
+      </Alert>
+    )
+  }
+
+  const status = analysisStatus(result)
+  const reasons = [...new Set(result.assessment?.fallback_reasons ?? [])]
+  const storageMessage = persistenceMessage(persistence)
+  const presentation =
+    status === 'complete'
+      ? {
+          badge: 'secondary' as const,
+          className: 'border-primary/30 bg-primary/5',
+          icon: <CheckCircle2 className="size-5 text-primary" />,
+        }
+      : status === 'degraded'
+        ? {
+            badge: 'warning' as const,
+            className: 'border-accent/40 bg-accent/5',
+            icon: <ShieldAlert className="size-5 text-accent-foreground" />,
+          }
+        : {
+            badge: 'destructive' as const,
+            className: 'border-destructive/30 bg-destructive/5',
+            icon: <XCircle className="size-5 text-destructive" />,
+          }
+
+  return (
+    <Alert className={presentation.className}>
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="mt-0.5 shrink-0">{presentation.icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <AlertTitle className="mb-0">{analysisStatusLabel(status)}</AlertTitle>
+            <Badge variant={presentation.badge}>{assessmentMethodLabel(result.assessment)}</Badge>
+          </div>
+          <AlertDescription className="mt-2">
+            {analysisStatusDescription(status)}
+            {result.assessment?.analysis_as_of
+              ? ` 分析日期：${result.assessment.analysis_as_of}。`
+              : ''}
+          </AlertDescription>
+
+          {reasons.length ? (
+            <div className="mt-3">
+              <div className="text-xs font-medium text-foreground">降级或不可用原因</div>
+              <ul className="mt-2 grid gap-1.5 text-xs text-muted-foreground sm:grid-cols-2">
+                {reasons.map((reason) => (
+                  <li className="min-w-0" key={reason}>
+                    <span className="text-foreground">{fallbackReasonLabel(reason)}</span>
+                    <code className="ml-1 break-all text-[11px] text-muted-foreground">
+                      ({reason})
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {storageMessage ? (
+            <div className="mt-3 border-t pt-3 text-xs text-muted-foreground">
+              {storageMessage}
+            </div>
+          ) : null}
+        </div>
+
+        {status !== 'complete' || storageMessage ? (
+          <Button disabled={isRetrying} onClick={onRetry} size="sm" variant="outline">
+            <RotateCcw className={isRetrying ? 'size-4 animate-spin' : 'size-4'} />
+            重新分析
+          </Button>
+        ) : null}
+      </div>
+    </Alert>
+  )
+}
+
+function EmptyChartState({
+  hasError,
+  isRetrying,
+  onRetry,
+}: {
+  hasError: boolean
+  isRetrying: boolean
+  onRetry: () => void
+}) {
+  return (
+    <div className="grid h-full place-items-center border-y">
+      <div className="max-w-sm px-6 text-center">
+        <Database className="mx-auto size-6 text-muted-foreground" />
+        <div className="mt-3 font-medium">{hasError ? '走势数据加载失败' : '暂无可用走势数据'}</div>
+        <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {hasError
+            ? '估值分析结果不会因此丢失，可以单独重试行情数据。'
+            : '当前数据源没有返回可验证的价格或净值序列。'}
+        </div>
+        <Button
+          className="mt-4"
+          disabled={isRetrying}
+          onClick={onRetry}
+          size="sm"
+          variant="outline"
+        >
+          <RotateCcw className={isRetrying ? 'size-4 animate-spin' : 'size-4'} />
+          重试数据
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 function MetricGrid({ isBusy, result }: { isBusy: boolean; result: AnalysisResult | undefined }) {
