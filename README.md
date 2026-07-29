@@ -113,6 +113,11 @@ GET http://127.0.0.1:8000/api/funds/161725/nav?start=2015-01-01
 POST http://127.0.0.1:8000/api/analyze
 ```
 
+`/health` includes process-local market-data source diagnostics under
+`data_sources`: aggregate request outcomes, consecutive failures, last
+success/failure times, and each upstream host's `closed`, `open`, or `half_open`
+circuit state. It never exposes request URLs, parameters, or raw upstream errors.
+
 Analysis, chat, and history endpoints require the Supabase access token in the request header:
 
 ```text

@@ -38,7 +38,12 @@ from market_lens.api.schemas import (
 )
 from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
-from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError, stock_bars_from_valuations
+from market_lens.data.eastmoney import (
+    EastmoneyClient,
+    EastmoneyError,
+    source_health_registry,
+    stock_bars_from_valuations,
+)
 from market_lens.errors import (
     InvalidRequestError,
     MarketLensError,
@@ -175,6 +180,7 @@ def sse_error_event(exc: MarketLensError) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, Any]:
     configured = any(server.enabled for server in mcp_gateway.config.servers)
+    source_health = source_health_registry.snapshot()
     if mcp_gateway.is_available():
         mcp_status = "available"
     elif not configured:
@@ -193,6 +199,8 @@ def health() -> dict[str, Any]:
         "sandbox_available": sandbox_runner.is_available(),
         "sandbox_backend": sandbox_runner.backend_name,
         "approval_signing_key_configured": settings.tool_approval_signing_key_configured,
+        "data_source_status": source_health["status"],
+        "data_sources": source_health,
     }
 
 

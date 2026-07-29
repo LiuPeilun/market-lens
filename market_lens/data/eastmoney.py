@@ -42,6 +42,7 @@ from market_lens.data.snapshot_validation import (
     validate_stock_bar_snapshot,
     validate_stock_valuation_snapshot,
 )
+from market_lens.data.source_health import SourceHealthRegistry
 from market_lens.storage.snapshots import ValidatedSnapshot, ValidatedSnapshotStore
 from market_lens.storage.sqlite_cache import SQLiteCache
 from market_lens.types import (
@@ -84,6 +85,10 @@ from market_lens.types import (
 
 
 class EastmoneyError(RuntimeError):
+    pass
+
+
+class SourceCircuitOpenError(EastmoneyError):
     pass
 
 
@@ -287,14 +292,43 @@ COMMODITY_MAIN_CONTRACTS: dict[CommodityMainContractKey, CommodityMainContractSp
 }
 
 
+def source_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    return (parsed.hostname or parsed.netloc or "unknown").lower()
+
+
+def source_error_code(exc: Exception | None) -> str:
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ReadTimeout)):
+        return "timeout"
+    if isinstance(exc, httpx.ConnectError):
+        return "connect_error"
+    if isinstance(exc, httpx.ReadError):
+        return "read_error"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "protocol_error"
+    if isinstance(exc, httpx.HTTPStatusError):
+        return "http_status_error"
+    if isinstance(exc, EastmoneyError):
+        return "invalid_response"
+    return "request_failed"
+
+
+source_health_registry = SourceHealthRegistry(
+    failure_threshold=settings.source_circuit_failure_threshold,
+    recovery_seconds=settings.source_circuit_recovery_seconds,
+)
+
+
 class EastmoneyClient:
     def __init__(
         self,
         cache: SQLiteCache | None = None,
         snapshot_store: ValidatedSnapshotStore | None = None,
+        source_health: SourceHealthRegistry | None = None,
     ) -> None:
         self.cache = cache or SQLiteCache(settings.db_path)
         self.snapshot_store = snapshot_store or ValidatedSnapshotStore(settings.db_path)
+        self.source_health = source_health or source_health_registry
         self._lkg_events_context: ContextVar[list[dict[str, Any]] | None] = (
             ContextVar(
                 f"eastmoney_lkg_events_{id(self)}",
@@ -1919,6 +1953,11 @@ class EastmoneyClient:
         if cached is not None:
             return cached
 
+        source = source_from_url(url)
+        if not self.source_health.acquire_request(source):
+            raise SourceCircuitOpenError(
+                f"Market data source circuit is open for {source}"
+            )
         last_error: Exception | None = None
         max_attempts = self.retries + 1
         for attempt in range(max_attempts):
@@ -1933,19 +1972,15 @@ class EastmoneyClient:
                     response = client.get(url)
                     response.raise_for_status()
                     text = response.content.decode("utf-8", errors="replace")
+                    self.source_health.record_success(source)
                     self.cache.set(url, text)
                     return text
-            except (
-                httpx.ConnectError,
-                httpx.ConnectTimeout,
-                httpx.ReadError,
-                httpx.ReadTimeout,
-                httpx.RemoteProtocolError,
-                httpx.HTTPStatusError,
-            ) as exc:
+            except httpx.HTTPError as exc:
                 last_error = exc
                 if attempt < max_attempts - 1:
                     time.sleep(0.4 * (2**attempt))
+        error_code = source_error_code(last_error)
+        self.source_health.record_failure(source, error_code=error_code)
         host = urlparse(url).netloc
         raise EastmoneyError(
             f"Failed to fetch Eastmoney data from {host} after {max_attempts} attempts: "
@@ -1965,6 +2000,11 @@ class EastmoneyClient:
                     return content
                 self.cache.delete(cache_key)
 
+        source = source_from_url(url)
+        if not self.source_health.acquire_request(source):
+            raise SourceCircuitOpenError(
+                f"Market data source circuit is open for {source}"
+            )
         last_error: Exception | None = None
         max_attempts = self.retries + 1
         for attempt in range(max_attempts):
@@ -1983,20 +2023,15 @@ class EastmoneyClient:
                         raise EastmoneyError(
                             f"Unexpected binary workbook response from {urlparse(url).netloc}"
                         )
+                    self.source_health.record_success(source)
                     self.cache.set(cache_key, base64.b64encode(content).decode("ascii"))
                     return content
-            except (
-                EastmoneyError,
-                httpx.ConnectError,
-                httpx.ConnectTimeout,
-                httpx.ReadError,
-                httpx.ReadTimeout,
-                httpx.RemoteProtocolError,
-                httpx.HTTPStatusError,
-            ) as exc:
+            except (EastmoneyError, httpx.HTTPError) as exc:
                 last_error = exc
                 if attempt < max_attempts - 1:
                     time.sleep(0.4 * (2**attempt))
+        error_code = source_error_code(last_error)
+        self.source_health.record_failure(source, error_code=error_code)
         host = urlparse(url).netloc
         raise EastmoneyError(
             f"Failed to fetch binary market data from {host} after {max_attempts} attempts: "

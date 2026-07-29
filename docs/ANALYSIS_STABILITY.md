@@ -202,6 +202,30 @@ primary valuation method passed its own scoring gates.
 | `last_known_good` | A numeric result used one or more explicitly disclosed validated LKG inputs |
 | `unavailable` | No numeric valuation method passed |
 
+## Source Health And Circuit State
+
+Outbound market-data transport is observed per normalized upstream hostname. The
+process-wide registry records one outcome for each completed network request,
+after the adapter's configured retries are exhausted or one attempt succeeds.
+HTTP cache hits and validated LKG reads do not count as new source successes and
+remain available while a source circuit is open.
+
+`GET /health` exposes `data_source_status` and a `data_sources` snapshot containing:
+
+- completed request, success, failure, rejection, and success-rate counters;
+- consecutive failures and the last attempt, success, and failure timestamps;
+- `closed`, `open`, or `half_open` circuit state and the next probe time;
+- only a stable `last_error_code`, never a URL, request parameters, or raw exception.
+
+The default circuit opens after three completed request failures. After a 60-second
+cooldown, exactly one request becomes the half-open probe; a successful probe closes
+the circuit and resets consecutive failures, while a failed probe opens it again.
+Both values are configurable. State is intentionally process-local and resets on
+service restart, so stale historical failures cannot lock a source after deployment.
+
+Source health describes upstream network availability. It does not replace dataset
+identity, structure, date, completeness, or valuation-quality validation.
+
 ## Current Interruption Audit
 
 Priority definitions:
@@ -225,7 +249,7 @@ Priority definitions:
 | ST-11 | P0 (resolved) | Frontend analysis rendering | Core analysis renders by `complete`, `degraded`, or `unavailable`; optional chart, table, and persistence failures remain separate warnings with retry actions | Keep frontend lint/build and degraded-state regression checks |
 | ST-12 | P0 (resolved) | `ValidatedSnapshotStore` | Normalized snapshots enforce identity, source, versions, age, hash, row count, and dataset validation | Keep corruption, staleness, malformed-response, and fallback tests |
 | ST-13 | P1 (resolved) | Fund holdings route | Route failure is preserved as `fund_holdings_route_unavailable` in route metadata, assessment, and trace | Keep stable-code regression tests |
-| ST-14 | P2 | Source health | No aggregate source success rate, last success time, or circuit state is exposed | Add source health diagnostics after fallback routes are implemented |
+| ST-14 | P2 (resolved) | Source health | Per-host request outcomes, last success/failure, consecutive failures, safe error codes, and circuit state are exposed through `/health`; open circuits retain cache and validated LKG access | Keep state-machine, transport-boundary, and safe-output regression tests |
 
 ## Existing Safe Isolation
 
@@ -238,8 +262,8 @@ The following paths already degrade without aborting the main result:
 - Individual REIT price, financial, distribution, and notice datasets after the REIT
   profile has been resolved.
 
-These paths still need stable reason codes and source-health reporting, but they are
-not the first interruption targets.
+These paths retain stable per-analysis reason codes, while their network hosts are
+also covered by aggregate source-health reporting.
 
 ## Next Implementation Order
 
@@ -249,7 +273,7 @@ After the deterministic matrices:
 2. Complete: add route-mismatch, timeout, and partial-tool failure injection tests.
 3. Complete: enforce declared timeout budgets as independent and shared-parent stage deadlines.
 4. Complete: make chat explain a structured unavailable assessment when the finance preparation path fails.
-5. Next: add source-health and circuit-state diagnostics now that fallback behavior is stable.
+5. Complete: add source-health and circuit-state diagnostics without changing valuation scoring.
 
 Strategy factors and weights remain frozen until these stability gates pass.
 
@@ -269,7 +293,8 @@ deadline, shared parent budget, and preservation of completed intermediate data.
 | Persistence failure | Direct analysis, synchronous chat, and streaming chat preserve computed output and expose persistence diagnostics | `tests/test_api_app.py` |
 | Partial tool failure | One failed tool result and one successful sibling result are both returned to the LLM, which can continue answering from available evidence | `tests/test_fault_injection.py` |
 | Chat finance-tool failure | Upstream, data-unavailable, and internal failures return schema-valid `unavailable` analysis; streaming completes and API persistence retains the diagnostic | `tests/test_chat_agent.py`, `tests/test_api_app.py` |
+| Repeated source failure | Completed request failures open a per-host circuit; cooldown permits one half-open probe, successful recovery closes it, and `/health` exposes only safe aggregate diagnostics | `tests/test_source_health.py` |
 
-The next reliability task is ST-14: expose aggregate source health, last
-success time, consecutive failures, and circuit state without changing
-valuation routing or scoring.
+The ST-01 through ST-14 reliability gates are complete. Future source adapters
+must use the same request boundary or provide equivalent health reporting before
+they are enabled in production routing.

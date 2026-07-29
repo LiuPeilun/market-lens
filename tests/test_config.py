@@ -37,3 +37,11 @@ def test_runtime_rejects_unsafe_approval_ttl(ttl: int) -> None:
 def test_runtime_rejects_negative_lkg_max_age() -> None:
     with pytest.raises(ValueError, match="LKG_MAX_AGE_SECONDS must not be negative"):
         Settings(lkg_max_age_seconds=-1).validate_runtime()
+
+
+def test_runtime_rejects_invalid_source_circuit_settings() -> None:
+    with pytest.raises(ValueError, match="FAILURE_THRESHOLD must be at least 1"):
+        Settings(source_circuit_failure_threshold=0).validate_runtime()
+
+    with pytest.raises(ValueError, match="RECOVERY_SECONDS must not be negative"):
+        Settings(source_circuit_recovery_seconds=-1).validate_runtime()

@@ -23,6 +23,12 @@ class Settings:
     port: int = int(os.getenv("MARKET_LENS_PORT", "8000"))
     http_timeout: float = float(os.getenv("MARKET_LENS_HTTP_TIMEOUT", "15"))
     http_retries: int = int(os.getenv("MARKET_LENS_HTTP_RETRIES", "2"))
+    source_circuit_failure_threshold: int = int(
+        os.getenv("MARKET_LENS_SOURCE_CIRCUIT_FAILURE_THRESHOLD", "3")
+    )
+    source_circuit_recovery_seconds: float = float(
+        os.getenv("MARKET_LENS_SOURCE_CIRCUIT_RECOVERY_SECONDS", "60")
+    )
     db_path: Path = Path(os.getenv("MARKET_LENS_DB_PATH", ".data/market_lens.sqlite3"))
     lkg_max_age_seconds: int = int(
         os.getenv("MARKET_LENS_LKG_MAX_AGE_SECONDS", str(7 * 24 * 60 * 60))
@@ -95,6 +101,14 @@ class Settings:
             )
         if self.lkg_max_age_seconds < 0:
             raise ValueError("MARKET_LENS_LKG_MAX_AGE_SECONDS must not be negative")
+        if self.source_circuit_failure_threshold < 1:
+            raise ValueError(
+                "MARKET_LENS_SOURCE_CIRCUIT_FAILURE_THRESHOLD must be at least 1"
+            )
+        if self.source_circuit_recovery_seconds < 0:
+            raise ValueError(
+                "MARKET_LENS_SOURCE_CIRCUIT_RECOVERY_SECONDS must not be negative"
+            )
         if (
             environment not in {"development", "dev", "test"}
             and not self.tool_approval_signing_key_configured
