@@ -3,7 +3,8 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from collections.abc import Iterator
-from datetime import date
+from contextvars import copy_context
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,7 +25,7 @@ from market_lens.data.snapshot_validation import (
     validate_fund_nav_snapshot,
     validate_stock_bar_snapshot,
 )
-from market_lens.storage.snapshots import ValidatedSnapshotStore
+from market_lens.storage.snapshots import ValidatedSnapshot, ValidatedSnapshotStore
 from market_lens.storage.sqlite_cache import SQLiteCache
 from market_lens.types import FundNavPoint, StockBar
 
@@ -95,6 +96,41 @@ def test_snapshot_store_round_trip_requires_exact_identity_and_source(
         )
         is None
     )
+
+
+def test_lkg_events_follow_stage_context_and_ignore_late_rotated_context(
+    snapshot_temp_root: Path,
+) -> None:
+    client = EastmoneyClient(
+        cache=SQLiteCache(snapshot_temp_root / "cache.sqlite3"),
+        snapshot_store=ValidatedSnapshotStore(
+            snapshot_temp_root / "snapshots.sqlite3"
+        ),
+    )
+    snapshot = ValidatedSnapshot(
+        dataset=STOCK_HISTORY_DATASET,
+        identity={"symbol": "600519"},
+        source=EASTMONEY_PUSH2HIS_SOURCE,
+        validator_version=STOCK_HISTORY_SNAPSHOT_VERSION,
+        payload=[{"date": "2026-07-20", "close": 10.0}],
+        source_as_of=date(2026, 7, 20),
+        retrieved_at=datetime(2026, 7, 20, tzinfo=UTC),
+        age_seconds=0,
+        row_count=1,
+        payload_sha256="a" * 64,
+    )
+
+    client.consume_lkg_events()
+    successful_stage_context = copy_context()
+    successful_stage_context.run(client._record_lkg_event, snapshot)
+
+    assert client.consume_lkg_events()[0]["dataset"] == STOCK_HISTORY_DATASET
+
+    late_stage_context = copy_context()
+    client.consume_lkg_events()
+    late_stage_context.run(client._record_lkg_event, snapshot)
+
+    assert client.consume_lkg_events() == []
 
 
 def test_snapshot_store_rejects_stale_snapshot(snapshot_temp_root: Path) -> None:

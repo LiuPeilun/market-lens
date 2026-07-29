@@ -17,6 +17,7 @@ from market_lens.tools.registry import ToolRegistry
 
 SEARCH_ASSETS_TOOL = "finance.search_assets"
 ANALYZE_ASSET_TOOL = "finance.analyze_asset"
+ANALYZE_ASSET_TIMEOUT_SECONDS = 300
 
 
 class FinanceToolHandlers:
@@ -123,7 +124,7 @@ def register_finance_tools(
             handler=handlers.analyze_asset,
             risk=ToolRisk.COMPUTE,
             execution_target=ExecutionTarget.TRUSTED_LOCAL,
-            timeout_seconds=90,
+            timeout_seconds=ANALYZE_ASSET_TIMEOUT_SECONDS,
             idempotent=True,
             requires_network=True,
         )

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from threading import Event
 
 import pytest
 
 from market_lens.agent.market_agent import MarketAnalysisAgent
+from market_lens.agent.stage_executor import StageExecutor
 from market_lens.api.schemas import AnalysisResult
 from market_lens.data.eastmoney import EastmoneyError
 from market_lens.types import (
@@ -318,6 +320,47 @@ def test_stock_price_failure_uses_verified_valuation_closes() -> None:
     assert trace["steps"][2]["status"] == "available"
 
 
+def test_stock_price_timeout_preserves_verified_valuation_result() -> None:
+    release = Event()
+
+    class Client(StockClientBase):
+        def get_stock_valuation(self, code: str) -> list[StockValuationPoint]:
+            return stock_valuation_rows()
+
+        def get_stock_history(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[StockBar]:
+            release.wait(timeout=0.2)
+            return [stock_bar(start), stock_bar(end, 11.0)]
+
+    rows = stock_valuation_rows()
+    agent = MarketAnalysisAgent(
+        Client(),
+        StageExecutor({("stock", "stock_price_history"): 0.01}),
+    )
+    try:
+        result = agent.analyze("stock", "600000", rows[0].date, END)
+    finally:
+        release.set()
+
+    AnalysisResult.model_validate(result)
+    trace = result["fallback_matrices"]["stock"]
+    assert result["assessment"]["status"] == "complete"
+    assert result["performance"]["sample_size"] == 300
+    assert trace["version"] == "fallback-matrix-v2"
+    assert trace["timeout_policy"] == "hard_stage_deadline"
+    assert trace["steps"][1]["reason"] == "stock_price_history_timeout"
+    assert trace["steps"][1]["details"]["deadline_enforced"] is True
+    assert trace["steps"][2]["status"] == "available"
+    assert result["assessment"]["data_quality"]["stage_timeouts"][0]["step"] == (
+        "stock_price_history"
+    )
+
+
 def test_stock_without_price_or_valuation_returns_terminal_result() -> None:
     class Client(StockClientBase):
         def get_stock_valuation(self, code: str) -> list[StockValuationPoint]:
@@ -564,6 +607,71 @@ def test_holdings_route_failure_is_preserved_in_assessment() -> None:
     assert result["fallback_matrices"]["fund"]["selected_step"] == "fund_terminal"
 
 
+def test_fund_holdings_timeout_preserves_nav_performance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = Event()
+    route = active_holdings_route()
+
+    class Client(FundClientBase):
+        def get_exchange_fund_price_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            return [fund_nav(start, 1.0), fund_nav(end, 1.1)]
+
+        def get_fund_name(self, code: str) -> str:
+            return "Active fund"
+
+        def get_fund_holdings_route(
+            self,
+            code: str,
+            *,
+            fund_name: str | None,
+            analysis_end: date,
+        ) -> FundHoldingsRoute:
+            return route
+
+        def find_index_for_fund(self, name: str) -> None:
+            return None
+
+    def blocked_holdings_analysis(
+        self: MarketAnalysisAgent,
+        holdings: list[FundHolding],
+        end: date,
+    ) -> dict[str, dict[str, object]]:
+        del self, holdings, end
+        release.wait(timeout=0.2)
+        return holding_analyses()
+
+    monkeypatch.setattr(
+        MarketAnalysisAgent,
+        "_analyze_fund_holdings",
+        blocked_holdings_analysis,
+    )
+    agent = MarketAnalysisAgent(
+        Client(),
+        StageExecutor({("fund", "fund_holdings_valuation"): 0.01}),
+    )
+    try:
+        result = agent.analyze("fund", "000001", START, END)
+    finally:
+        release.set()
+
+    AnalysisResult.model_validate(result)
+    assert result["performance"]["sample_size"] == 2
+    assert result["assessment"]["status"] == "unavailable"
+    assert result["fallback_matrices"]["fund"]["steps"][2]["reason"] == (
+        "fund_holdings_valuation_timeout"
+    )
+    assert "fund_holdings_valuation_timeout" in (
+        result["assessment"]["fallback_reasons"]
+    )
+
+
 def test_official_index_failure_uses_index_price_proxy() -> None:
     route, candidate = tracked_index_fixture()
 
@@ -690,3 +798,79 @@ def test_index_provider_failures_continue_to_eastmoney_price_proxy() -> None:
     assert index_trace["steps"][2]["reason"] == "sina_index_price_history_unavailable"
     assert index_trace["steps"][3]["status"] == "available"
     assert "malformed Sina response" not in str(result)
+
+
+def test_sina_index_timeout_continues_to_eastmoney_price_proxy() -> None:
+    release = Event()
+    route, candidate = tracked_index_fixture()
+
+    class Client(FundClientBase):
+        def get_exchange_fund_price_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            return [fund_nav(start, 1.0), fund_nav(end, 1.1)]
+
+        def get_fund_name(self, code: str) -> str:
+            return "CSI 300 ETF"
+
+        def get_fund_holdings_route(
+            self,
+            code: str,
+            *,
+            fund_name: str | None,
+            analysis_end: date,
+        ) -> FundHoldingsRoute:
+            return route
+
+        def get_csi_index_valuation_history(self, index_code: str) -> list[object]:
+            raise EastmoneyError("official source offline")
+
+        def search_assets(
+            self,
+            keyword: str,
+            *,
+            limit: int,
+            include_indexes: bool,
+        ) -> list[AssetSearchResult]:
+            return [candidate]
+
+        def get_sina_index_history(
+            self,
+            index_code: str,
+            quote_id: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[StockBar]:
+            release.wait(timeout=0.2)
+            return [stock_bar(start, 3000.0), stock_bar(end, 3200.0)]
+
+        def get_index_history(
+            self,
+            quote_id: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[StockBar]:
+            return [stock_bar(start, 3000.0), stock_bar(end, 3200.0)]
+
+    agent = MarketAnalysisAgent(
+        Client(),
+        StageExecutor({("index", "sina_index_price_history"): 0.01}),
+    )
+    try:
+        result = agent.analyze("fund", "510300", START, END)
+    finally:
+        release.set()
+
+    AnalysisResult.model_validate(result)
+    index_trace = result["fallback_matrices"]["index"]
+    assert result["assessment"]["status"] == "degraded"
+    assert result["assessment"]["method"] == "price_position_proxy"
+    assert index_trace["steps"][2]["reason"] == "sina_index_price_history_timeout"
+    assert index_trace["steps"][3]["status"] == "available"
+    assert index_trace["selected_step"] == "index_price_position_proxy"

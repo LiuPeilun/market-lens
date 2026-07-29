@@ -6,6 +6,7 @@ import json
 import re
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -294,7 +295,12 @@ class EastmoneyClient:
     ) -> None:
         self.cache = cache or SQLiteCache(settings.db_path)
         self.snapshot_store = snapshot_store or ValidatedSnapshotStore(settings.db_path)
-        self._lkg_events: list[dict[str, Any]] = []
+        self._lkg_events_context: ContextVar[list[dict[str, Any]] | None] = (
+            ContextVar(
+                f"eastmoney_lkg_events_{id(self)}",
+                default=None,
+            )
+        )
         self.timeout = settings.http_timeout
         self.retries = settings.http_retries
         self.headers = {
@@ -310,8 +316,15 @@ class EastmoneyClient:
         }
 
     def consume_lkg_events(self) -> list[dict[str, Any]]:
-        events = list(getattr(self, "_lkg_events", []))
-        self._lkg_events = []
+        events = list(self._current_lkg_events())
+        self._lkg_events_context.set([])
+        return events
+
+    def _current_lkg_events(self) -> list[dict[str, Any]]:
+        events = self._lkg_events_context.get()
+        if events is None:
+            events = []
+            self._lkg_events_context.set(events)
         return events
 
     def _delete_cached_response(self, url: str) -> None:
@@ -389,11 +402,7 @@ class EastmoneyClient:
         return decoded_rows
 
     def _record_lkg_event(self, snapshot: ValidatedSnapshot) -> None:
-        events = getattr(self, "_lkg_events", None)
-        if events is None:
-            events = []
-            self._lkg_events = events
-        events.append(
+        self._current_lkg_events().append(
             {
                 "dataset": snapshot.dataset,
                 "identity": snapshot.identity,

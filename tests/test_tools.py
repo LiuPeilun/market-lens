@@ -9,7 +9,12 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from market_lens.capabilities.finance.schemas import AnalyzeAssetInput, SearchAssetsInput
-from market_lens.capabilities.finance.tools import FinanceToolHandlers
+from market_lens.capabilities.finance.tools import (
+    ANALYZE_ASSET_TIMEOUT_SECONDS,
+    ANALYZE_ASSET_TOOL,
+    FinanceToolHandlers,
+    register_finance_tools,
+)
 from market_lens.data.eastmoney import EastmoneyError
 from market_lens.errors import DataUnavailableError
 from market_lens.tools.executor import (
@@ -85,6 +90,21 @@ def test_registry_exports_protocol_neutral_json_schemas() -> None:
     assert schema["name"] == "test.echo"
     assert schema["risk"] == "read"
     assert schema["input_schema"]["properties"]["value"]["type"] == "string"
+
+
+def test_finance_analysis_outer_timeout_covers_bounded_fallback_path() -> None:
+    registry = ToolRegistry()
+    register_finance_tools(
+        registry,
+        object(),  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
+    )
+
+    assert ANALYZE_ASSET_TIMEOUT_SECONDS == 300
+    assert (
+        registry.get(ANALYZE_ASSET_TOOL).timeout_seconds
+        == ANALYZE_ASSET_TIMEOUT_SECONDS
+    )
 
 
 @pytest.mark.parametrize("risk", [ToolRisk.READ, ToolRisk.COMPUTE])

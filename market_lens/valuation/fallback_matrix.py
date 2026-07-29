@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-FALLBACK_MATRIX_VERSION = "fallback-matrix-v1"
+FALLBACK_MATRIX_VERSION = "fallback-matrix-v2"
 FallbackMatrixKey = Literal["stock", "fund", "index"]
 FallbackStepStatus = Literal[
     "not_attempted",
@@ -94,6 +94,7 @@ class FallbackTrace:
     def serialize(self) -> dict[str, Any]:
         return {
             "version": FALLBACK_MATRIX_VERSION,
+            "timeout_policy": "hard_stage_deadline",
             "asset_scope": self.matrix.key,
             "selected_step": self.selected_step,
             "selected_method": self.selected_method,

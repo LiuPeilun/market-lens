@@ -6,6 +6,11 @@ from datetime import UTC, date, datetime
 from math import isfinite
 from typing import Any
 
+from market_lens.agent.stage_executor import (
+    StageBudget,
+    StageExecutor,
+    StageTimeoutError,
+)
 from market_lens.data.eastmoney import (
     EastmoneyClient,
     EastmoneyError,
@@ -66,8 +71,13 @@ MAX_FUND_HOLDING_ANALYSES = 30
 class MarketAnalysisAgent:
     """Business agent that calls fixed tools and returns structured analysis."""
 
-    def __init__(self, data_client: EastmoneyClient | None = None) -> None:
+    def __init__(
+        self,
+        data_client: EastmoneyClient | None = None,
+        stage_executor: StageExecutor | None = None,
+    ) -> None:
         self.data_client = data_client or EastmoneyClient()
+        self.stage_executor = stage_executor or StageExecutor()
 
     def analyze(
         self,
@@ -81,7 +91,18 @@ class MarketAnalysisAgent:
             stock_trace = new_fallback_trace("stock")
             consume_lkg_events(self.data_client)
             try:
-                all_valuations = self.data_client.get_stock_valuation(code)
+                all_valuations = self.stage_executor.run(
+                    "stock",
+                    "stock_valuation_history",
+                    lambda: self.data_client.get_stock_valuation(code),
+                )
+            except StageTimeoutError as exc:
+                all_valuations = []
+                record_stage_timeout(
+                    stock_trace,
+                    "stock_valuation_history",
+                    exc,
+                )
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 all_valuations = []
                 stock_trace.record(
@@ -98,7 +119,22 @@ class MarketAnalysisAgent:
             stock_name = next((item.name for item in reversed(all_valuations) if item.name), None)
             valuations = [item for item in all_valuations if start <= item.date <= end]
             try:
-                bars = self.data_client.get_stock_history(code, start=start, end=end)
+                bars = self.stage_executor.run(
+                    "stock",
+                    "stock_price_history",
+                    lambda: self.data_client.get_stock_history(
+                        code,
+                        start=start,
+                        end=end,
+                    ),
+                )
+            except StageTimeoutError as exc:
+                bars = []
+                record_stage_timeout(
+                    stock_trace,
+                    "stock_price_history",
+                    exc,
+                )
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 bars = []
                 stock_trace.record(
@@ -113,12 +149,29 @@ class MarketAnalysisAgent:
                     reason=None if bars else "stock_price_history_empty",
                 )
             if not bars:
-                bars = stock_bars_from_valuations(valuations)
-                stock_trace.record(
-                    "valuation_price_projection",
-                    "available" if bars else "unavailable",
-                    reason=None if bars else "valuation_price_projection_unavailable",
-                )
+                try:
+                    bars = self.stage_executor.run(
+                        "stock",
+                        "valuation_price_projection",
+                        lambda: stock_bars_from_valuations(valuations),
+                    )
+                except StageTimeoutError as exc:
+                    bars = []
+                    record_stage_timeout(
+                        stock_trace,
+                        "valuation_price_projection",
+                        exc,
+                    )
+                else:
+                    stock_trace.record(
+                        "valuation_price_projection",
+                        "available" if bars else "unavailable",
+                        reason=(
+                            None
+                            if bars
+                            else "valuation_price_projection_unavailable"
+                        ),
+                    )
             else:
                 stock_trace.record(
                     "valuation_price_projection",
@@ -148,6 +201,7 @@ class MarketAnalysisAgent:
                     ),
                 )
                 attach_fallback_traces(result, stock_trace)
+                append_stage_timeout_reasons(result, stock_trace)
                 return result
             critical_lkg_events = consume_lkg_events(self.data_client)
             profile = None
@@ -247,6 +301,7 @@ class MarketAnalysisAgent:
                     ["stock_valuation_score_unavailable"],
                 )
             attach_fallback_traces(result, stock_trace)
+            append_stage_timeout_reasons(result, stock_trace)
             apply_last_known_good_diagnostics(result, critical_lkg_events)
             return result
         if asset_type == "fund":
@@ -303,10 +358,21 @@ class MarketAnalysisAgent:
 
             consume_lkg_events(self.data_client)
             try:
-                nav_points = self.data_client.get_exchange_fund_price_nav(
-                    code,
-                    start=start,
-                    end=end,
+                nav_points = self.stage_executor.run(
+                    "fund",
+                    "exchange_fund_price_history",
+                    lambda: self.data_client.get_exchange_fund_price_nav(
+                        code,
+                        start=start,
+                        end=end,
+                    ),
+                )
+            except StageTimeoutError as exc:
+                nav_points = []
+                record_stage_timeout(
+                    fund_trace,
+                    "exchange_fund_price_history",
+                    exc,
                 )
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 nav_points = []
@@ -325,10 +391,21 @@ class MarketAnalysisAgent:
             fund_data_source = "exchange_price_history" if nav_points else "fund_nav_history"
             if not nav_points:
                 try:
-                    nav_points = self.data_client.get_fund_nav(
-                        code,
-                        start=start,
-                        end=end,
+                    nav_points = self.stage_executor.run(
+                        "fund",
+                        "fund_nav_history",
+                        lambda: self.data_client.get_fund_nav(
+                            code,
+                            start=start,
+                            end=end,
+                        ),
+                    )
+                except StageTimeoutError as exc:
+                    nav_points = []
+                    record_stage_timeout(
+                        fund_trace,
+                        "fund_nav_history",
+                        exc,
                     )
                 except (EastmoneyError, KeyError, TypeError, ValueError):
                     nav_points = []
@@ -384,6 +461,7 @@ class MarketAnalysisAgent:
                 )
                 mark_index_trace_not_applicable(index_trace)
                 attach_fallback_traces(result, fund_trace, index_trace)
+                append_stage_timeout_reasons(result, fund_trace, index_trace)
                 return result
             critical_lkg_events = consume_lkg_events(self.data_client)
             fund_name_error = None
@@ -392,29 +470,74 @@ class MarketAnalysisAgent:
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 fund_name = None
                 fund_name_error = "fund_name_unavailable"
+            holdings_budget = self.stage_executor.start_budget(
+                "fund",
+                "fund_holdings_valuation",
+            )
             holdings_route = None
             holdings_route_reasons: list[str] = []
+            holdings_timeout_reason = None
             try:
-                holdings_route = self.data_client.get_fund_holdings_route(
-                    code,
-                    fund_name=fund_name,
-                    analysis_end=end,
+                holdings_route = self.stage_executor.run_remaining(
+                    holdings_budget,
+                    lambda: self.data_client.get_fund_holdings_route(
+                        code,
+                        fund_name=fund_name,
+                        analysis_end=end,
+                    ),
                 )
                 holdings = holdings_route.holdings
+            except StageTimeoutError as exc:
+                holdings = []
+                holdings_timeout_reason = exc.reason_code
+                holdings_route_reasons.append(exc.reason_code)
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 holdings = []
                 holdings_route_reasons.append("fund_holdings_route_unavailable")
-            index_data_route = self._load_fund_index_data_route(
-                holdings_route,
-                analysis_end=end,
+            try:
+                holding_analyses = (
+                    self.stage_executor.run_remaining(
+                        holdings_budget,
+                        lambda: self._analyze_fund_holdings(holdings, end=end),
+                    )
+                    if holdings
+                    else {}
+                )
+            except StageTimeoutError as exc:
+                holding_analyses = {}
+                holdings_timeout_reason = exc.reason_code
+                if exc.reason_code not in holdings_route_reasons:
+                    holdings_route_reasons.append(exc.reason_code)
+
+            index_budget = self.stage_executor.start_budget(
+                "fund",
+                "fund_index_matrix",
             )
+            try:
+                index_data_route, official_index_valuation = self.stage_executor.run(
+                    "index",
+                    "official_index_fundamentals",
+                    lambda: self._load_official_index_valuation(
+                        holdings_route,
+                        fund_name=fund_name,
+                        analysis_end=end,
+                    ),
+                    parent=index_budget,
+                )
+            except StageTimeoutError as exc:
+                tracking = holdings_route.tracking if holdings_route else None
+                index_data_route = unavailable_fund_index_data_route(
+                    tracking,
+                    exc.reason_code,
+                )
+                official_index_valuation = None
             index_candidate, index_bars, benchmark_source = self._load_tracked_index_history(
                 holdings_route,
                 start=start,
                 end=end,
                 trace=index_trace,
+                parent_budget=index_budget,
             )
-            holding_analyses = self._analyze_fund_holdings(holdings, end=end)
             result = analyze_fund(
                 code,
                 nav_points,
@@ -438,11 +561,6 @@ class MarketAnalysisAgent:
             result["valuation"]["holdings_route"] = route_metadata
             holdings_score = result["valuation"].get("score")
 
-            official_index_valuation = analyze_csi_index_valuation(
-                index_data_route,
-                fund_name=fund_name,
-                analysis_end=end,
-            ) if index_data_route.scope != "unavailable" else None
             official_index_valuation_used = bool(
                 official_index_valuation
                 and official_index_valuation.get("score") is not None
@@ -486,7 +604,7 @@ class MarketAnalysisAgent:
                 reason=(
                     None
                     if is_finite_number(holdings_score)
-                    else "holdings_valuation_unavailable"
+                    else holdings_timeout_reason or "holdings_valuation_unavailable"
                 ),
                 selected=bool(
                     is_finite_number(holdings_score)
@@ -496,17 +614,39 @@ class MarketAnalysisAgent:
             if result["valuation"].get("score") is None:
                 if index_candidate is None:
                     try:
-                        index_candidate = self.data_client.find_index_for_fund(
-                            fund_name or code
+                        index_candidate = self.stage_executor.run_remaining(
+                            index_budget,
+                            lambda: self.data_client.find_index_for_fund(
+                                fund_name or code
+                            ),
+                        )
+                    except StageTimeoutError as exc:
+                        index_candidate = None
+                        record_stage_timeout(
+                            index_trace,
+                            "eastmoney_index_price_history",
+                            exc,
                         )
                     except (EastmoneyError, KeyError, TypeError, ValueError):
                         index_candidate = None
                     if index_candidate and index_candidate.quote_id:
                         try:
-                            index_bars = self.data_client.get_index_history(
-                                index_candidate.quote_id,
-                                start=start,
-                                end=end,
+                            index_bars = self.stage_executor.run(
+                                "index",
+                                "eastmoney_index_price_history",
+                                lambda: self.data_client.get_index_history(
+                                    index_candidate.quote_id,
+                                    start=start,
+                                    end=end,
+                                ),
+                                parent=index_budget,
+                            )
+                        except StageTimeoutError as exc:
+                            index_bars = []
+                            record_stage_timeout(
+                                index_trace,
+                                "eastmoney_index_price_history",
+                                exc,
                             )
                         except (EastmoneyError, KeyError, TypeError, ValueError):
                             index_bars = []
@@ -533,17 +673,30 @@ class MarketAnalysisAgent:
                     and benchmark_source in index_proxy_sources
                 ):
                     previous_valuation = result["valuation"]
-                    result["valuation"] = analyze_index_price_proxy(
-                        index_bars=index_bars,
-                        index_code=index_candidate.code,
-                        index_name=index_candidate.name,
-                        index_quote_id=index_candidate.quote_id,
-                    )
-                    preserve_fund_valuation_context(
-                        result["valuation"],
-                        previous_valuation,
-                        route_metadata,
-                    )
+                    try:
+                        result["valuation"] = self.stage_executor.run(
+                            "index",
+                            "index_price_position_proxy",
+                            lambda: analyze_index_price_proxy(
+                                index_bars=index_bars,
+                                index_code=index_candidate.code,
+                                index_name=index_candidate.name,
+                                index_quote_id=index_candidate.quote_id,
+                            ),
+                            parent=index_budget,
+                        )
+                    except StageTimeoutError as exc:
+                        record_stage_timeout(
+                            index_trace,
+                            "index_price_position_proxy",
+                            exc,
+                        )
+                    else:
+                        preserve_fund_valuation_context(
+                            result["valuation"],
+                            previous_valuation,
+                            route_metadata,
+                        )
             proxy_used = (
                 result["valuation"].get("status") == "proxy_valuation"
                 and is_finite_number(result["valuation"].get("score"))
@@ -554,7 +707,10 @@ class MarketAnalysisAgent:
                     "available",
                     selected=True,
                 )
-            elif not official_index_valuation_used:
+            elif (
+                not official_index_valuation_used
+                and not index_trace.was_recorded("index_price_position_proxy")
+            ):
                 index_trace.record(
                     "index_price_position_proxy",
                     "unavailable",
@@ -690,6 +846,7 @@ class MarketAnalysisAgent:
             )
             consume_lkg_events(self.data_client)
             attach_fallback_traces(result, fund_trace, index_trace)
+            append_stage_timeout_reasons(result, fund_trace, index_trace)
             apply_last_known_good_diagnostics(result, critical_lkg_events)
             return result
         raise InvalidRequestError(
@@ -906,6 +1063,28 @@ class MarketAnalysisAgent:
         )
         return result
 
+    def _load_official_index_valuation(
+        self,
+        route: FundHoldingsRoute | None,
+        *,
+        fund_name: str | None,
+        analysis_end: date,
+    ) -> tuple[FundIndexDataRoute, dict[str, Any] | None]:
+        index_data_route = self._load_fund_index_data_route(
+            route,
+            analysis_end=analysis_end,
+        )
+        valuation = (
+            analyze_csi_index_valuation(
+                index_data_route,
+                fund_name=fund_name,
+                analysis_end=analysis_end,
+            )
+            if index_data_route.scope != "unavailable"
+            else None
+        )
+        return index_data_route, valuation
+
     def _load_fund_index_data_route(
         self,
         route: FundHoldingsRoute | None,
@@ -962,6 +1141,7 @@ class MarketAnalysisAgent:
         start: date,
         end: date,
         trace: FallbackTrace,
+        parent_budget: StageBudget,
     ) -> tuple[AssetSearchResult | None, list[StockBar], str]:
         index_code = route.tracking.index_code if route and route.tracking else None
         if not index_code:
@@ -977,11 +1157,22 @@ class MarketAnalysisAgent:
                 )
             return None, [], "unavailable"
         try:
-            candidates = self.data_client.search_assets(
-                index_code,
-                limit=5,
-                include_indexes=True,
+            candidates = self.stage_executor.run_remaining(
+                parent_budget,
+                lambda: self.data_client.search_assets(
+                    index_code,
+                    limit=5,
+                    include_indexes=True,
+                ),
             )
+        except StageTimeoutError as exc:
+            for step_key in (
+                "target_etf_nav_history",
+                "sina_index_price_history",
+                "eastmoney_index_price_history",
+            ):
+                record_stage_timeout(trace, step_key, exc)
+            return None, [], "unavailable"
         except (EastmoneyError, KeyError, TypeError, ValueError):
             candidates = []
         candidate = next(
@@ -997,10 +1188,22 @@ class MarketAnalysisAgent:
         )
         if target_etf_code:
             try:
-                target_nav = self.data_client.get_fund_nav(
-                    target_etf_code,
-                    start=start,
-                    end=end,
+                target_nav = self.stage_executor.run(
+                    "index",
+                    "target_etf_nav_history",
+                    lambda: self.data_client.get_fund_nav(
+                        target_etf_code,
+                        start=start,
+                        end=end,
+                    ),
+                    parent=parent_budget,
+                )
+            except StageTimeoutError as exc:
+                target_nav = []
+                record_stage_timeout(
+                    trace,
+                    "target_etf_nav_history",
+                    exc,
                 )
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 target_nav = []
@@ -1031,11 +1234,23 @@ class MarketAnalysisAgent:
 
         if candidate and candidate.quote_id:
             try:
-                bars = self.data_client.get_sina_index_history(
-                    index_code,
-                    candidate.quote_id,
-                    start=start,
-                    end=end,
+                bars = self.stage_executor.run(
+                    "index",
+                    "sina_index_price_history",
+                    lambda: self.data_client.get_sina_index_history(
+                        index_code,
+                        candidate.quote_id,
+                        start=start,
+                        end=end,
+                    ),
+                    parent=parent_budget,
+                )
+            except StageTimeoutError as exc:
+                bars = []
+                record_stage_timeout(
+                    trace,
+                    "sina_index_price_history",
+                    exc,
                 )
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 bars = []
@@ -1062,10 +1277,22 @@ class MarketAnalysisAgent:
                     reason="sina_index_price_history_empty",
                 )
             try:
-                bars = self.data_client.get_index_history(
-                    candidate.quote_id,
-                    start=start,
-                    end=end,
+                bars = self.stage_executor.run(
+                    "index",
+                    "eastmoney_index_price_history",
+                    lambda: self.data_client.get_index_history(
+                        candidate.quote_id,
+                        start=start,
+                        end=end,
+                    ),
+                    parent=parent_budget,
+                )
+            except StageTimeoutError as exc:
+                bars = []
+                record_stage_timeout(
+                    trace,
+                    "eastmoney_index_price_history",
+                    exc,
                 )
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 bars = []
@@ -1228,6 +1455,60 @@ def stable_reason_codes(reasons: Any) -> list[str]:
 def first_stable_reason(reasons: Any, *, default: str) -> str:
     normalized = stable_reason_codes(reasons)
     return normalized[0] if normalized else default
+
+
+def record_stage_timeout(
+    trace: FallbackTrace,
+    step_key: str,
+    exc: StageTimeoutError,
+) -> None:
+    trace.record(
+        step_key,
+        "unavailable",
+        reason=exc.reason_code,
+        details={
+            "deadline_enforced": True,
+            "limiting_matrix": exc.budget.matrix_key,
+            "limiting_step": exc.budget.step_key,
+            "timeout_seconds": exc.budget.timeout_seconds,
+        },
+    )
+
+
+def append_stage_timeout_reasons(
+    result: dict[str, Any],
+    *traces: FallbackTrace,
+) -> None:
+    diagnostics = []
+    for trace in traces:
+        serialized = trace.serialize()
+        for step in serialized["steps"]:
+            reason = step.get("reason")
+            if not isinstance(reason, str) or not reason.endswith("_timeout"):
+                continue
+            details = step.get("details") or {}
+            diagnostics.append(
+                {
+                    "matrix": trace.matrix.key,
+                    "step": step["key"],
+                    "reason": reason,
+                    "timeout_budget_seconds": step["timeout_budget_seconds"],
+                    "limiting_matrix": details.get("limiting_matrix"),
+                    "limiting_step": details.get("limiting_step"),
+                    "limiting_timeout_seconds": details.get("timeout_seconds"),
+                }
+            )
+    if not diagnostics:
+        return
+    append_assessment_fallback_reasons(
+        result,
+        [item["reason"] for item in diagnostics],
+    )
+    assessment = result.get("assessment")
+    if not isinstance(assessment, dict):
+        return
+    data_quality = assessment.setdefault("data_quality", {})
+    data_quality["stage_timeouts"] = diagnostics
 
 
 def append_assessment_fallback_reasons(
