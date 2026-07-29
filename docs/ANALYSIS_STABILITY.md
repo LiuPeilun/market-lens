@@ -220,7 +220,7 @@ Priority definitions:
 | ST-08 | P0 (resolved) | `/api/analyze` persistence | Post-compute save failures return the valid analysis with `analysis_id=null` and structured persistence diagnostics | Keep direct, synchronous-chat, and streaming-chat failure tests |
 | ST-09 | P0 | Chat analysis tool call | Any finance tool error terminates the chat preparation path | Return and explain the structured degraded/unavailable assessment |
 | ST-10 | P0 | Finance tool executor | The entire analysis has one 90-second timeout and discards late partial work | Add bounded stage budgets and persist usable intermediate snapshots |
-| ST-11 | P0 | Frontend `requestJson` | Non-2xx responses are converted to an exception; no structured partial result can render | Render assessment status independently from transport and persistence warnings |
+| ST-11 | P0 (resolved) | Frontend analysis rendering | Core analysis renders by `complete`, `degraded`, or `unavailable`; optional chart, table, and persistence failures remain separate warnings with retry actions | Keep frontend lint/build and degraded-state regression checks |
 | ST-12 | P0 (resolved) | `ValidatedSnapshotStore` | Normalized snapshots enforce identity, source, versions, age, hash, row count, and dataset validation | Keep corruption, staleness, malformed-response, and fallback tests |
 | ST-13 | P1 (resolved) | Fund holdings route | Route failure is preserved as `fund_holdings_route_unavailable` in route metadata, assessment, and trace | Keep stable-code regression tests |
 | ST-14 | P2 | Source health | No aggregate source success rate, last success time, or circuit state is exposed | Add source health diagnostics after fallback routes are implemented |
@@ -243,9 +243,28 @@ not the first interruption targets.
 
 After the deterministic matrices:
 
-1. Render complete, degraded, stale, unavailable, and persistence states in the frontend.
-2. Add remaining route-mismatch, timeout, and partial-tool failure injection tests.
-3. Enforce the declared timeout budgets as independent stage deadlines.
-4. Add source-health diagnostics after the fallback behavior is stable.
+1. Complete: render complete, degraded, stale, unavailable, and persistence states in the frontend.
+2. Complete: add route-mismatch, timeout, and partial-tool failure injection tests.
+3. Next: enforce the declared timeout budgets as independent stage deadlines.
+4. Later: add source-health diagnostics after the fallback behavior is stable.
 
 Strategy factors and weights remain frozen until these stability gates pass.
+
+## Fault Injection Coverage
+
+The V2-5D fault-injection gate is covered by deterministic unit and boundary
+tests. These tests verify the returned contract and fallback trace; they do not
+claim that the declared matrix timeout budgets are independently enforced.
+
+| Failure mode | Verified behavior | Primary coverage |
+| --- | --- | --- |
+| Disconnect | Critical source failure uses validated LKG when eligible, otherwise continues through the deterministic matrix | `tests/test_validated_snapshots.py`, `tests/test_fallback_matrix.py` |
+| Timeout | Fund critical-source timeouts return stable `unavailable` output without exposing raw upstream details | `tests/test_fallback_matrix.py` |
+| Empty response | Empty stock valuation and price rows reach the stock terminal contract with explicit stable reason codes | `tests/test_fallback_matrix.py` |
+| Malformed response | Malformed live rows cannot replace validated LKG; malformed index-provider output does not block the next provider | `tests/test_validated_snapshots.py`, `tests/test_fallback_matrix.py` |
+| Stale snapshot | Stale LKG is rejected by exact identity, source, version, and maximum-age gates | `tests/test_validated_snapshots.py` |
+| Persistence failure | Direct analysis, synchronous chat, and streaming chat preserve computed output and expose persistence diagnostics | `tests/test_api_app.py` |
+| Partial tool failure | One failed tool result and one successful sibling result are both returned to the LLM, which can continue answering from available evidence | `tests/test_fault_injection.py` |
+
+The next reliability task is ST-10: enforce independent stage deadlines and
+retain usable intermediate results when a later stage exceeds its budget.

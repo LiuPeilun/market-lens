@@ -146,6 +146,36 @@ def active_holdings_route() -> FundHoldingsRoute:
     )
 
 
+def tracked_index_fixture() -> tuple[FundHoldingsRoute, AssetSearchResult]:
+    tracking = FundTrackingInfo(
+        fund_code="510300",
+        fund_name="CSI 300 ETF",
+        fund_type="index",
+        index_code="000300",
+        index_name="CSI 300",
+        target_etf_code=None,
+        target_etf_name=None,
+    )
+    route = FundHoldingsRoute(
+        holdings=[],
+        source="unavailable",
+        scope="unresolved_index_fund",
+        as_of=None,
+        coverage=0.0,
+        tracking=tracking,
+    )
+    candidate = AssetSearchResult(
+        asset_type="index",
+        code="000300",
+        name="CSI 300",
+        market="Shanghai",
+        quote_id="1.000300",
+        source_type="index",
+        raw={},
+    )
+    return route, candidate
+
+
 def holding_analyses() -> dict[str, dict[str, object]]:
     return {
         "600000": {
@@ -310,6 +340,34 @@ def test_stock_without_price_or_valuation_returns_terminal_result() -> None:
     assert result["fallback_matrices"]["stock"]["selected_step"] == "stock_terminal"
 
 
+def test_stock_empty_critical_sources_return_terminal_result() -> None:
+    class Client(StockClientBase):
+        def get_stock_valuation(self, code: str) -> list[StockValuationPoint]:
+            return []
+
+        def get_stock_history(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[StockBar]:
+            return []
+
+    result = MarketAnalysisAgent(Client()).analyze("stock", "600000", START, END)
+
+    AnalysisResult.model_validate(result)
+    assert result["valuation"]["score"] is None
+    assert result["assessment"]["status"] == "unavailable"
+    assert result["fallback_matrices"]["stock"]["selected_step"] == "stock_terminal"
+    assert result["fallback_matrices"]["stock"]["steps"][0]["reason"] == (
+        "stock_valuation_history_empty"
+    )
+    assert result["fallback_matrices"]["stock"]["steps"][1]["reason"] == (
+        "stock_price_history_empty"
+    )
+
+
 def test_fund_without_exchange_price_or_nav_returns_terminal_result() -> None:
     class Client(FundClientBase):
         def get_exchange_fund_price_nav(
@@ -338,6 +396,45 @@ def test_fund_without_exchange_price_or_nav_returns_terminal_result() -> None:
         "tracked_index_not_applicable"
     )
     AnalysisResult.model_validate(result)
+
+
+def test_fund_timeout_routes_return_stable_terminal_result() -> None:
+    class Client(FundClientBase):
+        def get_exchange_fund_price_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            raise EastmoneyError(
+                "Read timeout from https://private-upstream.example/quote"
+            )
+
+        def get_fund_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            raise EastmoneyError(
+                "Read timeout from https://private-upstream.example/nav"
+            )
+
+    result = MarketAnalysisAgent(Client()).analyze("fund", "000001", START, END)
+
+    AnalysisResult.model_validate(result)
+    serialized = str(result)
+    assert result["assessment"]["status"] == "unavailable"
+    assert result["assessment"]["fallback_reasons"] == [
+        "fund_nav_data_unavailable",
+        "exchange_fund_price_history_unavailable",
+        "fund_nav_history_unavailable",
+    ]
+    assert result["fallback_matrices"]["fund"]["selected_step"] == "fund_terminal"
+    assert "private-upstream.example" not in serialized
+    assert "Read timeout" not in serialized
 
 
 def test_reit_profile_failure_returns_terminal_result() -> None:
@@ -468,32 +565,7 @@ def test_holdings_route_failure_is_preserved_in_assessment() -> None:
 
 
 def test_official_index_failure_uses_index_price_proxy() -> None:
-    tracking = FundTrackingInfo(
-        fund_code="510300",
-        fund_name="CSI 300 ETF",
-        fund_type="index",
-        index_code="000300",
-        index_name="CSI 300",
-        target_etf_code=None,
-        target_etf_name=None,
-    )
-    route = FundHoldingsRoute(
-        holdings=[],
-        source="unavailable",
-        scope="unresolved_index_fund",
-        as_of=None,
-        coverage=0.0,
-        tracking=tracking,
-    )
-    candidate = AssetSearchResult(
-        asset_type="index",
-        code="000300",
-        name="CSI 300",
-        market="Shanghai",
-        quote_id="1.000300",
-        source_type="index",
-        raw={},
-    )
+    route, candidate = tracked_index_fixture()
 
     class Client(FundClientBase):
         def get_exchange_fund_price_nav(
@@ -550,3 +622,71 @@ def test_official_index_failure_uses_index_price_proxy() -> None:
     assert result["index_data_route"]["fallback_reasons"] == [
         "official_index_valuation_unavailable"
     ]
+
+
+def test_index_provider_failures_continue_to_eastmoney_price_proxy() -> None:
+    route, candidate = tracked_index_fixture()
+
+    class Client(FundClientBase):
+        def get_exchange_fund_price_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            return [fund_nav(start, 1.0), fund_nav(end, 1.1)]
+
+        def get_fund_name(self, code: str) -> str:
+            return "CSI 300 ETF"
+
+        def get_fund_holdings_route(
+            self,
+            code: str,
+            *,
+            fund_name: str | None,
+            analysis_end: date,
+        ) -> FundHoldingsRoute:
+            return route
+
+        def get_csi_index_valuation_history(self, index_code: str) -> list[object]:
+            raise EastmoneyError("official index request timed out")
+
+        def search_assets(
+            self,
+            keyword: str,
+            *,
+            limit: int,
+            include_indexes: bool,
+        ) -> list[AssetSearchResult]:
+            return [candidate]
+
+        def get_sina_index_history(
+            self,
+            index_code: str,
+            quote_id: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[StockBar]:
+            raise TypeError("malformed Sina response")
+
+        def get_index_history(
+            self,
+            quote_id: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[StockBar]:
+            return [stock_bar(start, 3000.0), stock_bar(end, 3200.0)]
+
+    result = MarketAnalysisAgent(Client()).analyze("fund", "510300", START, END)
+
+    AnalysisResult.model_validate(result)
+    index_trace = result["fallback_matrices"]["index"]
+    assert result["assessment"]["status"] == "degraded"
+    assert result["assessment"]["method"] == "price_position_proxy"
+    assert index_trace["selected_step"] == "index_price_position_proxy"
+    assert index_trace["steps"][2]["reason"] == "sina_index_price_history_unavailable"
+    assert index_trace["steps"][3]["status"] == "available"
+    assert "malformed Sina response" not in str(result)
