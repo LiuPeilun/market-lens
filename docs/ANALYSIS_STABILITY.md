@@ -251,6 +251,24 @@ Priority definitions:
 | ST-13 | P1 (resolved) | Fund holdings route | Route failure is preserved as `fund_holdings_route_unavailable` in route metadata, assessment, and trace | Keep stable-code regression tests |
 | ST-14 | P2 (resolved) | Source health | Per-host request outcomes, last success/failure, consecutive failures, safe error codes, and circuit state are exposed through `/health`; open circuits retain cache and validated LKG access | Keep state-machine, transport-boundary, and safe-output regression tests |
 
+### Fund index routing and partial holdings
+
+Tracked-index requests must be routed only to a provider that is known to cover
+the index namespace. In particular, Shenzhen `399xxx` indices such as `399006`
+must not be sent to the CSI official provider. Until a verified Shenzhen
+official adapter is available, the route records
+`official_index_provider_not_supported` and continues through the validated
+target-ETF fallback.
+
+The fund-holdings stage uses a shared deadline. If that deadline expires,
+member analyses completed before the timeout remain eligible for aggregation;
+the timeout reason is retained in the execution trace. Overall confidence is
+the conservative minimum across dimensions that have a finite numeric score.
+An unscored optional dimension is diagnostic absence, not zero-confidence
+evidence, and is excluded from the aggregate. When no dimension is scored, the
+result is `unavailable` and clients must display it as not assessable rather
+than as `0%`.
+
 ## Existing Safe Isolation
 
 The following paths already degrade without aborting the main result:

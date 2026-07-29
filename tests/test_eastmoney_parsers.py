@@ -45,6 +45,7 @@ from market_lens.data.eastmoney import (
     rank_search_results,
     repair_mojibake,
     stock_history_year_chunks,
+    supports_csi_official_index_code,
     tencent_stock_symbol,
 )
 from market_lens.types import (
@@ -67,6 +68,18 @@ def test_infer_exchange_fund_secid() -> None:
     assert infer_exchange_fund_secid("515450") == "1.515450"
     assert infer_exchange_fund_secid("159525") == "0.159525"
     assert infer_exchange_fund_secid("019670") is None
+
+
+def test_csi_provider_rejects_known_szse_index_codes_before_request() -> None:
+    assert supports_csi_official_index_code("000300") is True
+    assert supports_csi_official_index_code("931994") is True
+    assert supports_csi_official_index_code("399006") is False
+
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    with pytest.raises(ValueError, match="does not cover index 399006"):
+        client.get_csi_index_valuation_history("399006")
+    with pytest.raises(ValueError, match="does not cover index 399006"):
+        client.get_csi_index_full_weights("399006")
 
 
 def test_parse_stock_kline() -> None:
@@ -824,6 +837,62 @@ def test_fund_holdings_route_falls_back_to_target_etf(monkeypatch) -> None:
     assert route.holdings == target_full.holdings
     assert route.latest_top10 == target_top10
     assert route.fallback_reasons[0].startswith("official_index_full_weights_unavailable")
+
+
+def test_fund_holdings_route_skips_csi_for_szse_index(monkeypatch) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    tracking = FundTrackingInfo(
+        fund_code="110026",
+        fund_name="易方达创业板ETF联接A",
+        fund_type="指数型-股票",
+        index_code="399006",
+        index_name="创业板指数(价格)",
+        target_etf_code="159915",
+        target_etf_name="创业板ETF易方达",
+    )
+    target_full = build_fund_holdings_snapshot(
+        [
+            FundHolding(1, "300750", "宁德时代", 60.0, None, None, date(2025, 12, 31)),
+            FundHolding(2, "300308", "中际旭创", 39.8, None, None, date(2025, 12, 31)),
+        ],
+        source="eastmoney_fund_disclosure",
+        scope="target_etf_full_disclosure",
+        equity_allocation_pct=99.9,
+    )
+    monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+    monkeypatch.setattr(
+        client,
+        "get_csi_index_full_weights",
+        lambda code: (_ for _ in ()).throw(
+            AssertionError(f"CSI provider must not receive {code}")
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "get_csi_index_top_holdings",
+        lambda code, top_n=10: (_ for _ in ()).throw(
+            AssertionError(f"CSI provider must not receive {code}, top_n={top_n}")
+        ),
+    )
+    monkeypatch.setattr(
+        client,
+        "get_fund_top10_snapshot",
+        lambda code, source, scope: None,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_fund_full_holdings_snapshot",
+        lambda code, as_of, scope: target_full,
+    )
+
+    route = client.get_fund_holdings_route(
+        "110026",
+        analysis_end=date(2026, 7, 29),
+    )
+
+    assert route.scope == "target_etf_full_disclosure"
+    assert route.holdings == target_full.holdings
+    assert route.fallback_reasons == ("official_index_provider_not_supported",)
 
 
 def test_fund_holdings_route_uses_direct_holdings_for_active_fund(monkeypatch) -> None:

@@ -1234,7 +1234,7 @@ class EastmoneyClient:
         index_code: str,
         top_n: int = 10,
     ) -> list[FundHolding]:
-        normalized_code = normalize_csi_index_code(index_code)
+        normalized_code = require_csi_official_index_code(index_code)
         url = (
             "https://www.csindex.com.cn/csindex-home/index/weight/top10new/"
             f"{quote(normalized_code)}"
@@ -1250,7 +1250,7 @@ class EastmoneyClient:
         self,
         index_code: str,
     ) -> list[CsiIndexValuationPoint]:
-        normalized_code = normalize_csi_index_code(index_code)
+        normalized_code = require_csi_official_index_code(index_code)
         basic_info = self._get_csi_index_basic_info(normalized_code)
         expected_names = {
             str(basic_info.get("indexShortNameCn") or "").strip(),
@@ -1288,7 +1288,7 @@ class EastmoneyClient:
         self,
         index_code: str,
     ) -> list[CsiIndexConstituentWeight]:
-        normalized_code = normalize_csi_index_code(index_code)
+        normalized_code = require_csi_official_index_code(index_code)
         basic_info = self._get_csi_index_basic_info(normalized_code)
         expected_names = {
             str(basic_info.get("indexShortNameCn") or "").strip(),
@@ -1406,37 +1406,48 @@ class EastmoneyClient:
         if tracking and tracking.index_code:
             official_top10: FundHoldingsSnapshot | None = None
             target_top10: FundHoldingsSnapshot | None = None
-            try:
-                weights = self.get_csi_index_full_weights(tracking.index_code)
-            except (ValueError, EastmoneyError) as exc:
-                fallback_reasons.append(f"official_index_full_weights_unavailable: {exc}")
-            else:
-                if weights and weights[0].report_date <= route_as_of:
-                    full_snapshot = csi_weights_as_fund_holdings_snapshot(weights)
-                    return build_fund_holdings_route_from_snapshot(
-                        full_snapshot,
-                        tracking=tracking,
-                        fallback_reasons=fallback_reasons,
-                        latest_top10=build_top10_from_snapshot(full_snapshot),
-                        full_disclosure=full_snapshot,
+            if supports_csi_official_index_code(tracking.index_code):
+                try:
+                    weights = self.get_csi_index_full_weights(tracking.index_code)
+                except (ValueError, EastmoneyError) as exc:
+                    fallback_reasons.append(
+                        f"official_index_full_weights_unavailable: {exc}"
                     )
-                fallback_reasons.append("official_index_full_weights_unavailable_as_of_analysis")
+                else:
+                    if weights and weights[0].report_date <= route_as_of:
+                        full_snapshot = csi_weights_as_fund_holdings_snapshot(weights)
+                        return build_fund_holdings_route_from_snapshot(
+                            full_snapshot,
+                            tracking=tracking,
+                            fallback_reasons=fallback_reasons,
+                            latest_top10=build_top10_from_snapshot(full_snapshot),
+                            full_disclosure=full_snapshot,
+                        )
+                    fallback_reasons.append(
+                        "official_index_full_weights_unavailable_as_of_analysis"
+                    )
 
-            try:
-                holdings = self.get_csi_index_top_holdings(
-                    tracking.index_code,
-                    top_n=top_n,
-                )
-            except (ValueError, EastmoneyError) as exc:
-                fallback_reasons.append(f"official_index_top10_unavailable: {exc}")
-            else:
-                if holdings and holdings[0].report_date and holdings[0].report_date <= route_as_of:
-                    official_top10 = build_fund_holdings_snapshot(
-                        holdings,
-                        source="csindex_official",
-                        scope="tracked_index_top10",
-                        equity_allocation_pct=100.0,
+                try:
+                    holdings = self.get_csi_index_top_holdings(
+                        tracking.index_code,
+                        top_n=top_n,
                     )
+                except (ValueError, EastmoneyError) as exc:
+                    fallback_reasons.append(f"official_index_top10_unavailable: {exc}")
+                else:
+                    if (
+                        holdings
+                        and holdings[0].report_date
+                        and holdings[0].report_date <= route_as_of
+                    ):
+                        official_top10 = build_fund_holdings_snapshot(
+                            holdings,
+                            source="csindex_official",
+                            scope="tracked_index_top10",
+                            equity_allocation_pct=100.0,
+                        )
+            else:
+                fallback_reasons.append("official_index_provider_not_supported")
 
             if tracking.target_etf_code:
                 try:
@@ -2124,6 +2135,18 @@ def normalize_csi_index_code(code: str) -> str:
     normalized = str(code).strip().upper()
     if not re.fullmatch(r"[A-Z0-9.]+", normalized):
         raise ValueError(f"Invalid CSI index code: {code!r}")
+    return normalized
+
+
+def supports_csi_official_index_code(code: str) -> bool:
+    normalized = normalize_csi_index_code(code)
+    return re.fullmatch(r"399\d{3}", normalized) is None
+
+
+def require_csi_official_index_code(code: str) -> str:
+    normalized = normalize_csi_index_code(code)
+    if not supports_csi_official_index_code(normalized):
+        raise ValueError(f"CSI official provider does not cover index {normalized}")
     return normalized
 
 

@@ -217,8 +217,8 @@ def test_confidence_uses_geometric_components_caps_and_conservative_overall() ->
     )
     overall = conservative_overall_confidence(
         {
-            "valuation": {"confidence": 0.8},
-            "quality": {"confidence": 0.35},
+            "valuation": {"score": 40.0, "confidence": 0.8},
+            "quality": {"score": 70.0, "confidence": 0.35},
             "product": None,
         }
     )
@@ -226,6 +226,18 @@ def test_confidence_uses_geometric_components_caps_and_conservative_overall() ->
     assert detail["score"] == 0.4
     assert detail["caps"] == [{"reason": "proxy", "limit": 0.4}]
     assert overall == 0.35
+
+
+def test_overall_confidence_excludes_unscored_dimensions() -> None:
+    overall = conservative_overall_confidence(
+        {
+            "valuation": {"score": 52.0, "confidence": 0.59},
+            "quality": {"score": None, "confidence": 0.0},
+            "product": {"score": 90.0, "confidence": 0.75},
+        }
+    )
+
+    assert overall == 0.59
 
 
 def test_stock_analysis_exposes_v2_assessment_and_legacy_fields() -> None:

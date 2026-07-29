@@ -1371,6 +1371,15 @@ function AssessmentOverview({
   result: AnalysisResult | undefined
 }) {
   const assessment = resolveAssessment(result)
+  const hasScoredDimension = [
+    assessment.valuation,
+    assessment.quality,
+    assessment.product,
+  ].some((dimension) => Number.isFinite(dimension?.score))
+  const overallConfidence =
+    result?.assessment?.status === 'unavailable' || !hasScoredDimension
+      ? null
+      : assessment.overallConfidence
   const qualityLabel = result?.asset_type === 'fund' ? '底层资产质量' : '基本面质量'
   const dimensions = [
     {
@@ -1440,7 +1449,7 @@ function AssessmentOverview({
             <Skeleton className="mt-5 h-10 w-28" />
           ) : (
             <div className="mt-4 text-3xl font-semibold">
-              {formatPercent(assessment.overallConfidence, 0)}
+              {overallConfidence == null ? '不可评估' : formatPercent(overallConfidence, 0)}
             </div>
           )}
           <div className="mt-4 text-xs leading-relaxed text-muted-foreground">

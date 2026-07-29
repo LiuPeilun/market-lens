@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import prod
+from math import isfinite, prod
 from typing import Any
 
 from market_lens.valuation.scoring import clamp
@@ -42,7 +42,9 @@ def conservative_overall_confidence(
     values = [
         float(dimension["confidence"])
         for dimension in dimensions.values()
-        if dimension is not None and dimension.get("confidence") is not None
+        if dimension is not None
+        and isinstance(dimension.get("score"), int | float)
+        and isfinite(float(dimension["score"]))
+        and dimension.get("confidence") is not None
     ]
     return round(min(values), 4) if values else 0.0
-

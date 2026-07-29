@@ -548,7 +548,7 @@ def test_fund_name_failure_preserves_valid_holdings_result(
     monkeypatch.setattr(
         MarketAnalysisAgent,
         "_analyze_fund_holdings",
-        lambda self, holdings, end: holding_analyses(),
+        lambda self, holdings, end, progress=None: holding_analyses(),
     )
 
     result = MarketAnalysisAgent(Client()).analyze("fund", "000001", START, END)
@@ -642,8 +642,9 @@ def test_fund_holdings_timeout_preserves_nav_performance(
         self: MarketAnalysisAgent,
         holdings: list[FundHolding],
         end: date,
+        progress: object | None = None,
     ) -> dict[str, dict[str, object]]:
-        del self, holdings, end
+        del self, holdings, end, progress
         release.wait(timeout=0.2)
         return holding_analyses()
 
@@ -669,6 +670,73 @@ def test_fund_holdings_timeout_preserves_nav_performance(
     )
     assert "fund_holdings_valuation_timeout" in (
         result["assessment"]["fallback_reasons"]
+    )
+
+
+def test_fund_holdings_timeout_preserves_completed_member_analyses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = Event()
+    route = active_holdings_route()
+
+    class Client(FundClientBase):
+        def get_exchange_fund_price_nav(
+            self,
+            code: str,
+            *,
+            start: date,
+            end: date,
+        ) -> list[FundNavPoint]:
+            return [fund_nav(start, 1.0), fund_nav(end, 1.1)]
+
+        def get_fund_name(self, code: str) -> str:
+            return "Active fund"
+
+        def get_fund_holdings_route(
+            self,
+            code: str,
+            *,
+            fund_name: str | None,
+            analysis_end: date,
+        ) -> FundHoldingsRoute:
+            return route
+
+        def find_index_for_fund(self, name: str) -> None:
+            return None
+
+    def partially_completed_holdings_analysis(
+        self: MarketAnalysisAgent,
+        holdings: list[FundHolding],
+        end: date,
+        progress: object | None = None,
+    ) -> dict[str, dict[str, object]]:
+        del self, holdings, end
+        assert progress is not None
+        progress.add("600000", holding_analyses()["600000"])  # type: ignore[attr-defined]
+        release.wait(timeout=0.2)
+        return progress.snapshot()  # type: ignore[attr-defined,no-any-return]
+
+    monkeypatch.setattr(
+        MarketAnalysisAgent,
+        "_analyze_fund_holdings",
+        partially_completed_holdings_analysis,
+    )
+    agent = MarketAnalysisAgent(
+        Client(),
+        StageExecutor({("fund", "fund_holdings_valuation"): 0.01}),
+    )
+    try:
+        result = agent.analyze("fund", "000001", START, END)
+    finally:
+        release.set()
+
+    AnalysisResult.model_validate(result)
+    assert result["assessment"]["status"] == "degraded"
+    assert result["assessment"]["dimensions"]["valuation"]["score"] is not None
+    assert result["assessment"]["overall_confidence"] > 0
+    assert result["valuation"]["holdings"]["analyzed_count"] == 1
+    assert result["fallback_matrices"]["fund"]["steps"][2]["reason"] == (
+        "fund_holdings_valuation_timeout"
     )
 
 

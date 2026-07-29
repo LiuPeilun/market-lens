@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from math import isfinite
+from threading import Lock
 from typing import Any
 
 from market_lens.agent.stage_executor import (
@@ -16,6 +17,7 @@ from market_lens.data.eastmoney import (
     EastmoneyError,
     is_a_share_symbol,
     stock_bars_from_valuations,
+    supports_csi_official_index_code,
 )
 from market_lens.errors import InvalidRequestError
 from market_lens.types import (
@@ -66,6 +68,20 @@ from market_lens.valuation.research_context import (
 from market_lens.valuation.routing import route_asset_model
 
 MAX_FUND_HOLDING_ANALYSES = 30
+
+
+class HoldingAnalysisProgress:
+    def __init__(self) -> None:
+        self._analyses: dict[str, dict[str, Any]] = {}
+        self._lock = Lock()
+
+    def add(self, code: str, analysis: dict[str, Any]) -> None:
+        with self._lock:
+            self._analyses[code] = analysis
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return dict(self._analyses)
 
 
 class MarketAnalysisAgent:
@@ -494,17 +510,22 @@ class MarketAnalysisAgent:
             except (EastmoneyError, KeyError, TypeError, ValueError):
                 holdings = []
                 holdings_route_reasons.append("fund_holdings_route_unavailable")
+            holding_progress = HoldingAnalysisProgress()
             try:
                 holding_analyses = (
                     self.stage_executor.run_remaining(
                         holdings_budget,
-                        lambda: self._analyze_fund_holdings(holdings, end=end),
+                        lambda: self._analyze_fund_holdings(
+                            holdings,
+                            end=end,
+                            progress=holding_progress,
+                        ),
                     )
                     if holdings
                     else {}
                 )
             except StageTimeoutError as exc:
-                holding_analyses = {}
+                holding_analyses = holding_progress.snapshot()
                 holdings_timeout_reason = exc.reason_code
                 if exc.reason_code not in holdings_route_reasons:
                     holdings_route_reasons.append(exc.reason_code)
@@ -602,9 +623,12 @@ class MarketAnalysisAgent:
                 "fund_holdings_valuation",
                 "available" if is_finite_number(holdings_score) else "unavailable",
                 reason=(
-                    None
-                    if is_finite_number(holdings_score)
-                    else holdings_timeout_reason or "holdings_valuation_unavailable"
+                    holdings_timeout_reason
+                    or (
+                        None
+                        if is_finite_number(holdings_score)
+                        else "holdings_valuation_unavailable"
+                    )
                 ),
                 selected=bool(
                     is_finite_number(holdings_score)
@@ -1102,6 +1126,11 @@ class MarketAnalysisAgent:
                 tracking,
                 "tracked_index_identity_incomplete",
             )
+        if not supports_csi_official_index_code(tracking.index_code):
+            return unavailable_fund_index_data_route(
+                tracking,
+                "official_index_provider_not_supported",
+            )
 
         try:
             valuation_points = self.data_client.get_csi_index_valuation_history(
@@ -1330,6 +1359,7 @@ class MarketAnalysisAgent:
         self,
         holdings: list[FundHolding],
         end: date,
+        progress: HoldingAnalysisProgress | None = None,
     ) -> dict[str, dict[str, Any]]:
         supported = sorted(
             (item for item in holdings if is_supported_holding_stock(item.code)),
@@ -1338,7 +1368,7 @@ class MarketAnalysisAgent:
         if not supported:
             return {}
 
-        analyses: dict[str, dict[str, Any]] = {}
+        current_progress = progress or HoldingAnalysisProgress()
         worker_count = min(4, len(supported))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
@@ -1352,8 +1382,8 @@ class MarketAnalysisAgent:
                 except (EastmoneyError, ValueError):
                     continue
                 if analysis is not None:
-                    analyses[code] = analysis
-        return analyses
+                    current_progress.add(code, analysis)
+        return current_progress.snapshot()
 
     def _analyze_holding_stock(
         self,

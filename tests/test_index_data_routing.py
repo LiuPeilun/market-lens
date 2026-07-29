@@ -188,6 +188,42 @@ def test_market_agent_index_route_fails_closed_before_requesting_weights() -> No
     )
 
 
+def test_market_agent_skips_csi_provider_for_szse_index() -> None:
+    class UnexpectedCsiClient:
+        def get_csi_index_valuation_history(self, index_code: str) -> object:
+            raise AssertionError(f"CSI provider must not receive {index_code}")
+
+        def get_csi_index_full_weights(self, index_code: str) -> object:
+            raise AssertionError(f"CSI provider must not receive {index_code}")
+
+    tracking = FundTrackingInfo(
+        fund_code="110026",
+        fund_name="易方达创业板ETF联接A",
+        fund_type="指数型-股票",
+        index_code="399006",
+        index_name="创业板指数(价格)",
+        target_etf_code="159915",
+        target_etf_name="创业板ETF易方达",
+    )
+    holdings_route = FundHoldingsRoute(
+        holdings=[],
+        source="eastmoney_fund_disclosure",
+        scope="target_etf_full_disclosure",
+        as_of=date(2025, 12, 31),
+        coverage=1.0,
+        tracking=tracking,
+    )
+    agent = MarketAnalysisAgent(UnexpectedCsiClient())  # type: ignore[arg-type]
+
+    route = agent._load_fund_index_data_route(
+        holdings_route,
+        analysis_end=date(2026, 7, 29),
+    )
+
+    assert route.scope == "unavailable"
+    assert route.fallback_reasons == ("official_index_provider_not_supported",)
+
+
 def test_official_index_valuation_scores_only_long_pe_history() -> None:
     route = build_csi_fund_index_data_route(
         tracking_info(),
