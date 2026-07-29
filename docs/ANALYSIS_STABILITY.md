@@ -220,7 +220,7 @@ Priority definitions:
 | ST-06 | P1 (resolved) | Index price fallback discovery | Discovery failure is isolated and cannot discard an existing holdings result | Keep holdings-result preservation tests |
 | ST-07 | P0 (resolved) | `/api/analyze` tool boundary | Tool failures retain stable category and retryability; only invalid requests map to HTTP 400 | Keep category mappings covered by API and tool-boundary regression tests |
 | ST-08 | P0 (resolved) | `/api/analyze` persistence | Post-compute save failures return the valid analysis with `analysis_id=null` and structured persistence diagnostics | Keep direct, synchronous-chat, and streaming-chat failure tests |
-| ST-09 | P0 | Chat analysis tool call | Any finance tool error terminates the chat preparation path | Return and explain the structured degraded/unavailable assessment |
+| ST-09 | P0 (resolved) | Chat analysis tool call | Classified finance-tool failures become schema-valid, persistable `unavailable` analyses; synchronous and streaming chat explain stable category and retryability without exposing raw errors | Keep upstream, data-unavailable, internal-error, streaming, and persistence regression tests |
 | ST-10 | P0 (resolved) | Finance stage executor | Matrix v2 enforces independent and shared-parent hard deadlines; completed price, NAV, valuation, and validated LKG work is retained while timed-out stages emit stable diagnostics | Keep hard-timeout, parent-budget, and intermediate-result regression tests |
 | ST-11 | P0 (resolved) | Frontend analysis rendering | Core analysis renders by `complete`, `degraded`, or `unavailable`; optional chart, table, and persistence failures remain separate warnings with retry actions | Keep frontend lint/build and degraded-state regression checks |
 | ST-12 | P0 (resolved) | `ValidatedSnapshotStore` | Normalized snapshots enforce identity, source, versions, age, hash, row count, and dataset validation | Keep corruption, staleness, malformed-response, and fallback tests |
@@ -248,8 +248,8 @@ After the deterministic matrices:
 1. Complete: render complete, degraded, stale, unavailable, and persistence states in the frontend.
 2. Complete: add route-mismatch, timeout, and partial-tool failure injection tests.
 3. Complete: enforce declared timeout budgets as independent and shared-parent stage deadlines.
-4. Next: make chat explain a structured degraded or unavailable assessment when the finance preparation path fails.
-5. Later: add source-health diagnostics after the fallback behavior is stable.
+4. Complete: make chat explain a structured unavailable assessment when the finance preparation path fails.
+5. Next: add source-health and circuit-state diagnostics now that fallback behavior is stable.
 
 Strategy factors and weights remain frozen until these stability gates pass.
 
@@ -268,6 +268,8 @@ deadline, shared parent budget, and preservation of completed intermediate data.
 | Stale snapshot | Stale LKG is rejected by exact identity, source, version, and maximum-age gates | `tests/test_validated_snapshots.py` |
 | Persistence failure | Direct analysis, synchronous chat, and streaming chat preserve computed output and expose persistence diagnostics | `tests/test_api_app.py` |
 | Partial tool failure | One failed tool result and one successful sibling result are both returned to the LLM, which can continue answering from available evidence | `tests/test_fault_injection.py` |
+| Chat finance-tool failure | Upstream, data-unavailable, and internal failures return schema-valid `unavailable` analysis; streaming completes and API persistence retains the diagnostic | `tests/test_chat_agent.py`, `tests/test_api_app.py` |
 
-The next reliability task is ST-09: keep the chat path responsive with a
-structured degraded or unavailable explanation when finance preparation fails.
+The next reliability task is ST-14: expose aggregate source health, last
+success time, consecutive failures, and circuit state without changing
+valuation routing or scoring.

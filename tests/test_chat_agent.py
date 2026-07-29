@@ -4,6 +4,9 @@ from datetime import date
 
 from market_lens.agent.chat_agent import ChatAgent, ChatAssetContext, extract_asset_keyword
 from market_lens.agent.llm_client import LLMChatTurn, LLMToolCall
+from market_lens.api.schemas import AnalysisResult
+from market_lens.data.eastmoney import EastmoneyError
+from market_lens.errors import DataUnavailableError
 from market_lens.tools.executor import ToolExecutor
 from market_lens.tools.models import ToolInput, ToolOutput, ToolSpec
 from market_lens.tools.registry import ToolRegistry
@@ -84,6 +87,21 @@ class FakeAnalysisAgent:
             },
             "notes": [],
         }
+
+
+class FailingAnalysisAgent:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def analyze(
+        self,
+        asset_type: str,
+        code: str,
+        start: date,
+        end: date,
+    ) -> dict[str, object]:
+        del asset_type, code, start, end
+        raise self.error
 
 
 class FakeLLMClient:
@@ -284,3 +302,119 @@ def test_chat_agent_uses_tools_for_general_repository_question() -> None:
     assert result["intent"] == "general_query"
     assert result["answer"] == "这是经过工具结果支撑的仓库说明。"
     assert result["citations"] == ["工具调用：mcp.deepwiki.ask_question（success）"]
+
+
+def test_chat_returns_structured_unavailable_when_finance_upstream_fails() -> None:
+    agent = ChatAgent(
+        data_client=FakeDataClient(),
+        analysis_agent=FailingAnalysisAgent(
+            EastmoneyError("secret upstream host disconnected")
+        ),
+        use_llm=False,
+    )
+
+    result = agent.reply(
+        message="分析 600519",
+        context=None,
+        start=date(2024, 1, 1),
+        end=date(2026, 7, 20),
+    )
+
+    analysis = result["analysis"]
+    AnalysisResult.model_validate(analysis)
+    diagnostic = analysis["assessment"]["data_quality"]["chat_tool_failure"]
+    assert analysis["assessment"]["status"] == "unavailable"
+    assert analysis["valuation"]["score"] is None
+    assert diagnostic == {
+        "tool_name": "finance.analyze_asset",
+        "error_code": "market_data_upstream_unavailable",
+        "category": "upstream_unavailable",
+        "retryable": True,
+    }
+    assert "暂时无法完成估值" in result["answer"]
+    assert "稍后重新发起分析" in result["answer"]
+    assert "secret upstream" not in str(result)
+    assert result["citations"] == [
+        "分析工具状态：finance.analyze_asset"
+        "（market_data_upstream_unavailable，可重试）。"
+    ]
+
+
+def test_chat_unavailable_data_failure_is_not_marked_retryable() -> None:
+    agent = ChatAgent(
+        data_client=FakeDataClient(),
+        analysis_agent=FailingAnalysisAgent(
+            DataUnavailableError(
+                "verified_data_unavailable",
+                "No verified data for this asset",
+            )
+        ),
+        use_llm=False,
+    )
+
+    result = agent.reply(
+        message="分析 600519",
+        context=None,
+        start=date(2024, 1, 1),
+        end=date(2026, 7, 20),
+    )
+
+    diagnostic = result["analysis"]["assessment"]["data_quality"][
+        "chat_tool_failure"
+    ]
+    assert diagnostic["category"] == "data_unavailable"
+    assert diagnostic["retryable"] is False
+    assert "当前不应自动重试" in result["answer"]
+
+
+def test_chat_internal_tool_failure_hides_exception_details() -> None:
+    agent = ChatAgent(
+        data_client=FakeDataClient(),
+        analysis_agent=FailingAnalysisAgent(
+            RuntimeError("secret internal implementation detail")
+        ),
+        use_llm=False,
+    )
+
+    result = agent.reply(
+        message="分析 600519",
+        context=None,
+        start=date(2024, 1, 1),
+        end=date(2026, 7, 20),
+    )
+
+    diagnostic = result["analysis"]["assessment"]["data_quality"][
+        "chat_tool_failure"
+    ]
+    assert diagnostic["error_code"] == "tool_execution_failed"
+    assert diagnostic["category"] == "internal_error"
+    assert diagnostic["retryable"] is False
+    assert "secret internal" not in str(result)
+
+
+def test_chat_stream_explains_finance_failure_instead_of_emitting_error() -> None:
+    agent = ChatAgent(
+        data_client=FakeDataClient(),
+        analysis_agent=FailingAnalysisAgent(EastmoneyError("upstream offline")),
+        use_llm=False,
+    )
+
+    events = list(
+        agent.stream_reply(
+            message="分析 600519",
+            context=None,
+            start=date(2024, 1, 1),
+            end=date(2026, 7, 20),
+        )
+    )
+
+    progress = [event for event in events if event["type"] == "progress"]
+    meta = next(event for event in events if event["type"] == "meta")
+    token = next(event for event in events if event["type"] == "token")
+    assert not any(event["type"] == "error" for event in events)
+    assert meta["analysis"]["assessment"]["status"] == "unavailable"
+    assert "暂时无法完成估值" in token["delta"]
+    assert ("analyze_asset", "failed") in [
+        (event["id"], event["status"]) for event in progress
+    ]
+    assert events[-1] == {"type": "done"}

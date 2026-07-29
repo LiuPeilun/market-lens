@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Generator, Iterator
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from queue import Queue
 from threading import Thread
 from typing import Any, Literal, TypeVar
@@ -14,13 +14,21 @@ from market_lens.agent.llm_client import (
     build_general_llm_messages,
     build_llm_messages,
 )
-from market_lens.agent.market_agent import MarketAnalysisAgent
+from market_lens.agent.market_agent import (
+    MarketAnalysisAgent,
+    build_terminal_market_result,
+)
 from market_lens.agent.tool_orchestrator import ToolOrchestrator, ToolTrace
 from market_lens.capabilities.finance.tools import ANALYZE_ASSET_TOOL, SEARCH_ASSETS_TOOL
 from market_lens.config import settings
 from market_lens.data.eastmoney import EastmoneyClient, is_a_share_symbol
+from market_lens.errors import ErrorCategory
 from market_lens.tools.catalog import build_default_executor
-from market_lens.tools.executor import ToolExecutor, require_tool_data
+from market_lens.tools.executor import (
+    ToolExecutor,
+    ToolInvocationError,
+    require_tool_data,
+)
 from market_lens.tools.models import ToolApprovalGrant, ToolContext
 from market_lens.types import AssetType
 from market_lens.valuation.metrics import format_pct
@@ -187,6 +195,20 @@ class ChatAgent:
                     context=self.tool_context,
                 )
             )
+        except ToolInvocationError as exc:
+            _emit_progress(
+                progress_callback,
+                "analyze_asset",
+                "analysis",
+                "failed",
+                "市场分析暂不可用，正在整理失败原因",
+                exc.result.error_code or "finance_analysis_failed",
+            )
+            analysis = build_chat_tool_unavailable_analysis(
+                asset,
+                analysis_as_of=end,
+                exc=exc,
+            )
         except Exception:
             _emit_progress(
                 progress_callback,
@@ -197,15 +219,16 @@ class ChatAgent:
                 asset.code,
             )
             raise
-        _emit_progress(
-            progress_callback,
-            "analyze_asset",
-            "analysis",
-            "completed",
-            "已完成市场数据与估值分析",
-            asset.code,
-        )
-        analysis = tool_data["result"]
+        else:
+            _emit_progress(
+                progress_callback,
+                "analyze_asset",
+                "analysis",
+                "completed",
+                "已完成市场数据与估值分析",
+                asset.code,
+            )
+            analysis = tool_data["result"]
         asset_payload = {
             "asset_type": analysis.get("asset_type", asset.asset_type),
             "code": analysis.get("code", asset.code),
@@ -559,6 +582,8 @@ def build_answer(intent: ChatIntent, message: str, analysis: dict[str, Any]) -> 
     overall_confidence = assessment.get("overall_confidence")
     if overall_confidence is None:
         overall_confidence = valuation_dimension.get("confidence")
+    if assessment.get("status") == "unavailable":
+        return build_unavailable_answer(asset_label, assessment)
 
     if intent == "data_source":
         method = valuation.get("method") or "unknown"
@@ -621,6 +646,17 @@ def build_answer(intent: ChatIntent, message: str, analysis: dict[str, Any]) -> 
 
 def build_citations(analysis: dict[str, Any]) -> list[str]:
     valuation = analysis.get("valuation") or {}
+    assessment = analysis.get("assessment") or {}
+    data_quality = assessment.get("data_quality") or {}
+    tool_failure = data_quality.get("chat_tool_failure")
+    if isinstance(tool_failure, dict):
+        retry_label = "可重试" if tool_failure.get("retryable") else "不可自动重试"
+        return [
+            "分析工具状态："
+            f"{tool_failure.get('tool_name') or ANALYZE_ASSET_TOOL}"
+            f"（{tool_failure.get('error_code') or 'finance_analysis_failed'}，"
+            f"{retry_label}）。"
+        ]
     citations = ["收益和回撤来自历史行情/净值数据。"]
     method = valuation.get("method")
     if method == "index_price_percentile_proxy":
@@ -632,6 +668,103 @@ def build_citations(analysis: dict[str, Any]) -> list[str]:
     elif method:
         citations.append(f"估值方法：{method}。")
     return citations
+
+
+def build_chat_tool_unavailable_analysis(
+    asset: ChatAssetContext,
+    *,
+    analysis_as_of: date,
+    exc: ToolInvocationError,
+) -> dict[str, Any]:
+    result = exc.result
+    error_code = stable_tool_error_code(result.error_code)
+    category = tool_error_category(result.error_category, error_code)
+    retryable = bool(
+        result.retryable or category == ErrorCategory.UPSTREAM_UNAVAILABLE.value
+    )
+    analysis = build_terminal_market_result(
+        asset_type=asset.asset_type,
+        code=asset.code,
+        name=asset.name,
+        analysis_as_of=analysis_as_of,
+        retrieved_at=datetime.now(UTC),
+        fallback_reasons=[error_code],
+    )
+    diagnostic = {
+        "tool_name": result.tool_name or ANALYZE_ASSET_TOOL,
+        "error_code": error_code,
+        "category": category,
+        "retryable": retryable,
+    }
+    assessment = analysis["assessment"]
+    data_quality = assessment["data_quality"]
+    data_quality["chat_tool_failure"] = diagnostic
+    data_quality["sources"] = [
+        {
+            "key": "chat_finance_analysis_tool",
+            "source": diagnostic["tool_name"],
+            "status": "unavailable",
+            "source_as_of": None,
+            "retrieved_at": data_quality.get("retrieved_at"),
+            "reason": error_code,
+        }
+    ]
+    analysis["notes"].insert(
+        0,
+        "The finance analysis tool did not return a verified result.",
+    )
+    return analysis
+
+
+def build_unavailable_answer(
+    asset_label: str,
+    assessment: dict[str, Any],
+) -> str:
+    data_quality = assessment.get("data_quality") or {}
+    tool_failure = data_quality.get("chat_tool_failure")
+    if isinstance(tool_failure, dict):
+        category = str(tool_failure.get("category") or ErrorCategory.INTERNAL_ERROR)
+        cause = {
+            ErrorCategory.UPSTREAM_UNAVAILABLE.value: "上游市场数据服务暂时不可用",
+            ErrorCategory.DATA_UNAVAILABLE.value: "当前没有通过校验的市场数据",
+            ErrorCategory.INVALID_REQUEST.value: "分析请求未通过参数校验",
+            ErrorCategory.INTERNAL_ERROR.value: "市场分析流程发生内部错误",
+            ErrorCategory.PERSISTENCE_ERROR.value: "分析结果保存服务暂时不可用",
+        }.get(category, "市场分析工具暂时不可用")
+        retry_text = (
+            "该错误允许重试，请稍后重新发起分析。"
+            if tool_failure.get("retryable")
+            else "当前不应自动重试，需要检查请求或分析服务状态。"
+        )
+        return (
+            f"{asset_label} 本次暂时无法完成估值。{cause}，"
+            f"系统没有生成估值分或投资结论。{retry_text}"
+        )
+    return (
+        f"{asset_label} 当前没有足够的可验证数据支持估值，"
+        "因此系统没有生成估值分或投资结论。请结合降级原因补充数据后重试。"
+    )
+
+
+def stable_tool_error_code(value: str | None) -> str:
+    normalized = re.sub(
+        r"[^a-z0-9_]+",
+        "_",
+        str(value or "finance_analysis_failed").casefold(),
+    ).strip("_")
+    return normalized or "finance_analysis_failed"
+
+
+def tool_error_category(value: str | None, error_code: str) -> str:
+    valid_categories = {category.value for category in ErrorCategory}
+    if value in valid_categories:
+        return str(value)
+    return {
+        "invalid_input": ErrorCategory.INVALID_REQUEST.value,
+        "tool_timeout": ErrorCategory.UPSTREAM_UNAVAILABLE.value,
+        "invalid_output": ErrorCategory.INTERNAL_ERROR.value,
+        "tool_execution_failed": ErrorCategory.INTERNAL_ERROR.value,
+    }.get(error_code, ErrorCategory.INTERNAL_ERROR.value)
 
 
 def format_asset_label(analysis: dict[str, Any]) -> str:

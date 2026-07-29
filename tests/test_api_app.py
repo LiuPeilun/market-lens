@@ -170,6 +170,46 @@ def analysis_result_payload(*, include_assessment: bool) -> dict:
     return result
 
 
+def unavailable_analysis_result_payload() -> dict:
+    result = analysis_result_payload(include_assessment=True)
+    result["valuation"].update(
+        {
+            "method": "unavailable",
+            "score": None,
+            "level": "unknown",
+            "level_zh": "未评分",
+            "confidence": 0.0,
+        }
+    )
+    result["performance"] = {
+        "sample_size": 0,
+        "total_return": None,
+        "annualized_return": None,
+        "max_drawdown": None,
+    }
+    assessment = result["assessment"]
+    assessment["status"] = "unavailable"
+    assessment["method"] = "unavailable"
+    assessment["fallback_reasons"] = ["market_data_upstream_unavailable"]
+    assessment["overall_confidence"] = 0.0
+    for dimension in ("valuation", "quality"):
+        assessment["dimensions"][dimension].update(
+            {
+                "score": None,
+                "level": "unknown",
+                "level_zh": "未评分",
+                "confidence": 0.0,
+            }
+        )
+    assessment["data_quality"]["chat_tool_failure"] = {
+        "tool_name": "finance.analyze_asset",
+        "error_code": "market_data_upstream_unavailable",
+        "category": "upstream_unavailable",
+        "retryable": True,
+    }
+    return result
+
+
 def test_analyze_requires_authentication() -> None:
     response = TestClient(app).post(
         "/api/analyze",
@@ -399,6 +439,74 @@ def test_chat_returns_answer_when_post_compute_persistence_fails(monkeypatch) ->
         "chat_user_message",
         "chat_assistant_message",
     ]
+
+
+def test_chat_persists_structured_unavailable_analysis(monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeRepository:
+        def expire_stale_tool_approvals(self, *args, **kwargs):
+            return []
+
+        def ensure_chat_session(self, *args, **kwargs):
+            return {"id": "33333333-3333-3333-3333-333333333333"}
+
+        def save_analysis(self, *args, **kwargs):
+            captured["analysis"] = kwargs["result"]
+            return {"id": "44444444-4444-4444-4444-444444444444"}
+
+        def update_chat_session(self, *args, **kwargs):
+            return {"id": "33333333-3333-3333-3333-333333333333"}
+
+        def save_chat_message(self, *args, **kwargs):
+            return {"id": "message-id"}
+
+    class FakeChatAgent:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def reply(self, **kwargs):
+            return {
+                "answer": "本次暂时无法完成估值，请稍后重试。",
+                "intent": "analyze_asset",
+                "asset": {"asset_type": "stock", "code": "600519", "name": "贵州茅台"},
+                "analysis": unavailable_analysis_result_payload(),
+                "candidates": [],
+                "citations": [],
+            }
+
+    user = AuthenticatedUser(
+        UUID("11111111-1111-1111-1111-111111111111"),
+        "user@example.com",
+        "token",
+    )
+    app.dependency_overrides[get_current_user] = lambda: user
+    monkeypatch.setattr("market_lens.api.app.get_client", lambda: object())
+    monkeypatch.setattr("market_lens.api.app.get_repository", FakeRepository)
+    monkeypatch.setattr("market_lens.api.app.ChatAgent", FakeChatAgent)
+    monkeypatch.setattr(
+        "market_lens.api.app.build_default_executor",
+        lambda **kwargs: object(),
+    )
+    try:
+        response = TestClient(app).post(
+            "/api/chat",
+            json={
+                "message": "分析贵州茅台",
+                "start": "2024-01-01",
+                "end": "2026-07-15",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis"]["assessment"]["status"] == "unavailable"
+    assert payload["persistence"]["status"] == "saved"
+    assert captured["analysis"]["assessment"]["data_quality"][
+        "chat_tool_failure"
+    ]["retryable"] is True
 
 
 def test_chat_stream_continues_after_post_compute_persistence_fails(monkeypatch) -> None:

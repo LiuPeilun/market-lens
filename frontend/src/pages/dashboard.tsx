@@ -366,14 +366,18 @@ export function DashboardPage() {
         setCode(event.asset.code)
         setSelectedAssetName(event.asset.name ?? event.analysis.name)
         setChatAnalysis(event.analysis)
-        setSubmitted({
-          assetType: event.asset.asset_type,
-          code: event.asset.code,
-          end: end || undefined,
-          name: event.asset.name ?? event.analysis.name ?? undefined,
-          requestId: crypto.randomUUID(),
-          start,
-        })
+        if (analysisStatus(event.analysis) === 'unavailable') {
+          setSubmitted(null)
+        } else {
+          setSubmitted({
+            assetType: event.asset.asset_type,
+            code: event.asset.code,
+            end: end || undefined,
+            name: event.asset.name ?? event.analysis.name ?? undefined,
+            requestId: crypto.randomUUID(),
+            start,
+          })
+        }
       }
     } else if (event.type === 'citations') {
       setChatMessages((items) =>
