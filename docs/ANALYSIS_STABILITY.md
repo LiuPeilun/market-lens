@@ -255,10 +255,26 @@ Priority definitions:
 
 Tracked-index requests must be routed only to a provider that is known to cover
 the index namespace. In particular, Shenzhen `399xxx` indices such as `399006`
-must not be sent to the CSI official provider. Until a verified Shenzhen
-official adapter is available, the route records
-`official_index_provider_not_supported` and continues through the validated
-target-ETF fallback.
+must not be sent to the CSI official provider. The verified CNIndex adapter
+checks official identity and can ingest the published top-ten weights. Its
+public endpoint lists all constituents but exposes weights for only the top
+ten, and historical month parameters still return the latest snapshot. The
+adapter therefore never labels this data as complete weights, valuation
+history, or a historical backtest input. A validated target-ETF full
+disclosure takes precedence; otherwise the official top ten is an explicit
+limited-holdings fallback with
+`official_index_full_weights_not_published`.
+
+For a verified CNIndex fund, the official related-products endpoint also
+cross-checks both the fund code and target ETF against the tracked index code.
+An explicit target mismatch removes that target from subsequent holdings and
+NAV routing. Temporary product-endpoint failure is diagnostic only and does
+not masquerade as an identity mismatch. The normalized official top-ten result
+is stored as an exact `index_code + top_n` validated snapshot. LKG restoration
+requires the same source, validator version, hash, row count, report date,
+unique codes, descending positive weights, and retrieval-age limit. A
+holdings-only LKG marks the assessment degraded but does not replace a
+separately selected official index valuation method.
 
 The fund-holdings stage uses a shared deadline. If that deadline expires,
 member analyses completed before the timeout remain eligible for aggregation;

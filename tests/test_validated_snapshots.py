@@ -13,21 +13,25 @@ import pytest
 from market_lens.agent.market_agent import apply_last_known_good_diagnostics
 from market_lens.data.eastmoney import EastmoneyClient, EastmoneyError
 from market_lens.data.snapshot_validation import (
+    CNINDEX_OFFICIAL_SOURCE,
     EASTMONEY_F10_NAV_SOURCE,
     EASTMONEY_PUSH2HIS_SOURCE,
     EXCHANGE_FUND_PRICE_DATASET,
     FUND_NAV_DATASET,
     FUND_NAV_SNAPSHOT_VERSION,
+    INDEX_TOP_HOLDINGS_DATASET,
+    INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION,
     STOCK_HISTORY_DATASET,
     STOCK_HISTORY_SNAPSHOT_VERSION,
     STOCK_VALUATION_DATASET,
     serialize_fund_nav_point,
     validate_fund_nav_snapshot,
+    validate_index_top_holdings_snapshot,
     validate_stock_bar_snapshot,
 )
 from market_lens.storage.snapshots import ValidatedSnapshot, ValidatedSnapshotStore
 from market_lens.storage.sqlite_cache import SQLiteCache
-from market_lens.types import FundNavPoint, StockBar
+from market_lens.types import FundHolding, FundNavPoint, StockBar
 
 
 @pytest.fixture
@@ -249,6 +253,111 @@ def test_dataset_validators_reject_bad_dates_and_incomplete_values() -> None:
         start=date(2026, 7, 1),
         end=date(2026, 7, 20),
     )
+
+
+def test_index_top_holdings_validator_rejects_incomplete_or_duplicate_rows() -> None:
+    rows = [
+        FundHolding(
+            rank=index,
+            code=f"300{index:03d}",
+            name=f"样本{index}",
+            weight_pct=float(11 - index),
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2026, 7, 29),
+        )
+        for index in range(1, 11)
+    ]
+
+    assert validate_index_top_holdings_snapshot(
+        rows,
+        expected_count=10,
+        today=date(2026, 7, 30),
+    )
+    assert not validate_index_top_holdings_snapshot(
+        rows[:9],
+        expected_count=10,
+        today=date(2026, 7, 30),
+    )
+    duplicate = [*rows[:-1], FundHolding(**{**rows[-1].__dict__, "code": rows[0].code})]
+    assert not validate_index_top_holdings_snapshot(
+        duplicate,
+        expected_count=10,
+        today=date(2026, 7, 30),
+    )
+
+
+def test_cnindex_top_holdings_uses_exact_validated_lkg_after_live_failure(
+    snapshot_temp_root: Path,
+    monkeypatch,
+) -> None:
+    db_path = snapshot_temp_root / "cnindex.sqlite3"
+    client = EastmoneyClient(
+        cache=SQLiteCache(db_path),
+        snapshot_store=ValidatedSnapshotStore(db_path, clock=lambda: 1_000),
+    )
+    identity_payload = {
+        "code": 200,
+        "data": {
+            "indexcode": "399006",
+            "indexname": "创业板指",
+            "indexfullcname": "创业板指数",
+        },
+    }
+    sample_payload = {
+        "code": 200,
+        "data": {
+            "rows": [
+                {
+                    "dateStr": "2026-07-29",
+                    "seccode": f"300{index:03d}",
+                    "secname": f"样本{index}",
+                    "weight": str(11 - index),
+                }
+                for index in range(1, 11)
+            ]
+        },
+    }
+
+    def live_response(url: str, ttl_seconds: int, is_success) -> dict:
+        del ttl_seconds, is_success
+        return identity_payload if "selectIndexByCode" in url else sample_payload
+
+    monkeypatch.setattr(client, "_get_validated_json", live_response)
+    expected = client.get_cnindex_index_top_holdings(
+        "399006",
+        expected_name="创业板指数(价格)",
+        top_n=10,
+        as_of=date(2026, 7, 30),
+    )
+    assert client.consume_lkg_events() == []
+
+    def fail_live(url: str, ttl_seconds: int, is_success) -> dict:
+        del url, ttl_seconds, is_success
+        raise EastmoneyError("CNIndex offline")
+
+    monkeypatch.setattr(client, "_get_validated_json", fail_live)
+    restored = client.get_cnindex_index_top_holdings(
+        "399006",
+        expected_name="创业板指数(价格)",
+        top_n=10,
+        as_of=date(2026, 7, 30),
+    )
+
+    assert restored == expected
+    event = client.consume_lkg_events()[0]
+    assert event["dataset"] == INDEX_TOP_HOLDINGS_DATASET
+    assert event["source"] == CNINDEX_OFFICIAL_SOURCE
+    assert event["validator_version"] == INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION
+    assert event["identity"] == {"index_code": "399006", "top_n": 10}
+
+    with pytest.raises(EastmoneyError, match="CNIndex offline"):
+        client.get_cnindex_index_top_holdings(
+            "399006",
+            expected_name="创业板指数(价格)",
+            top_n=5,
+            as_of=date(2026, 7, 30),
+        )
 
 
 def test_stock_history_uses_valid_lkg_after_live_failure(
@@ -591,6 +700,41 @@ def test_lkg_diagnostics_keep_unavailable_assessment_unavailable() -> None:
 
     assert result["assessment"]["status"] == "unavailable"
     assert result["assessment"]["method"] == "unavailable"
+
+
+def test_optional_lkg_diagnostics_preserve_selected_valuation_method() -> None:
+    result = {
+        "notes": [],
+        "assessment": {
+            "status": "complete",
+            "method": "index_fundamental_valuation",
+            "dimensions": {"valuation": {"score": 42.0}},
+            "fallback_reasons": [],
+            "data_quality": {"sources": [], "warnings": []},
+        },
+    }
+    event = {
+        "dataset": INDEX_TOP_HOLDINGS_DATASET,
+        "identity": {"index_code": "399006", "top_n": 10},
+        "source": CNINDEX_OFFICIAL_SOURCE,
+        "source_as_of": "2026-07-29",
+        "snapshot_retrieved_at": "2026-07-29T08:00:00+00:00",
+        "snapshot_age_seconds": 60,
+        "row_count": 10,
+        "payload_sha256": "a" * 64,
+        "validator_version": INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION,
+        "fallback_reason": "upstream_unavailable",
+    }
+
+    apply_last_known_good_diagnostics(
+        result,
+        [event],
+        affects_valuation_method=False,
+    )
+
+    assert result["assessment"]["status"] == "degraded"
+    assert result["assessment"]["method"] == "index_fundamental_valuation"
+    assert result["assessment"]["fallback_reasons"] == ["last_known_good_snapshot"]
 
 
 def stock_bar(point_date: date) -> StockBar:

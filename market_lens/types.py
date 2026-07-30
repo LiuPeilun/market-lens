@@ -458,6 +458,7 @@ class FundHoldingsRoute:
     unexplained_equity_weight_pct: float | None = None
     latest_top10: FundHoldingsSnapshot | None = None
     full_disclosure: FundHoldingsSnapshot | None = None
+    validation: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

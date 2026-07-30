@@ -4,19 +4,22 @@ from datetime import date
 from math import isfinite
 from typing import Any
 
-from market_lens.types import FundNavPoint, StockBar, StockValuationPoint
+from market_lens.types import FundHolding, FundNavPoint, StockBar, StockValuationPoint
 
 STOCK_HISTORY_SNAPSHOT_VERSION = "stock_history_v1"
 STOCK_VALUATION_SNAPSHOT_VERSION = "stock_valuation_v1"
 FUND_NAV_SNAPSHOT_VERSION = "fund_nav_v1"
+INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION = "index_top_holdings_v1"
 STOCK_HISTORY_DATASET = "stock_history"
 STOCK_VALUATION_DATASET = "stock_valuation_history"
 FUND_NAV_DATASET = "fund_nav_history"
 EXCHANGE_FUND_PRICE_DATASET = "exchange_fund_price_history"
+INDEX_TOP_HOLDINGS_DATASET = "index_top_holdings"
 EASTMONEY_PUSH2HIS_SOURCE = "eastmoney_push2his"
 EASTMONEY_DATACENTER_SOURCE = "eastmoney_datacenter"
 EASTMONEY_PINGZHONGDATA_SOURCE = "eastmoney_pingzhongdata"
 EASTMONEY_F10_NAV_SOURCE = "eastmoney_f10_nav"
+CNINDEX_OFFICIAL_SOURCE = "cnindex_official"
 
 
 def serialize_stock_bar(row: StockBar) -> dict[str, Any]:
@@ -234,6 +237,67 @@ def validate_fund_nav_snapshot(
         if not _valid_optional_finite(row.daily_growth_pct):
             return False
     return True
+
+
+def serialize_index_top_holding(row: FundHolding) -> dict[str, Any]:
+    return {
+        "rank": row.rank,
+        "code": row.code,
+        "name": row.name,
+        "weight_pct": row.weight_pct,
+        "report_date": row.report_date.isoformat() if row.report_date else None,
+    }
+
+
+def decode_index_top_holdings(payload: Any) -> list[FundHolding]:
+    if not isinstance(payload, list):
+        raise TypeError("Index top holdings snapshot payload must be a list")
+    return [
+        FundHolding(
+            rank=int(_snapshot_number(row, "rank")),
+            code=_snapshot_text(row, "code", required=True),
+            name=_snapshot_text(row, "name", required=True),
+            weight_pct=_snapshot_optional_number(row, "weight_pct"),
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=_snapshot_date(row, "report_date"),
+        )
+        for row in _snapshot_rows(payload)
+    ]
+
+
+def validate_index_top_holdings_snapshot(
+    rows: list[FundHolding],
+    *,
+    expected_count: int,
+    today: date | None = None,
+) -> bool:
+    if len(rows) != expected_count or expected_count <= 0:
+        return False
+    report_dates = {row.report_date for row in rows}
+    if None in report_dates or len(report_dates) != 1:
+        return False
+    report_date = next(iter(report_dates))
+    if report_date is None or report_date > (today or date.today()):
+        return False
+    if [row.rank for row in rows] != list(range(1, expected_count + 1)):
+        return False
+    if len({row.code for row in rows}) != expected_count:
+        return False
+    weights: list[float] = []
+    for row in rows:
+        if (
+            not row.code.isdigit()
+            or len(row.code) != 6
+            or not row.name
+            or row.weight_pct is None
+            or not isfinite(row.weight_pct)
+            or row.weight_pct <= 0
+            or row.weight_pct > 100
+        ):
+            return False
+        weights.append(row.weight_pct)
+    return weights == sorted(weights, reverse=True) and sum(weights) <= 102.0
 
 
 def _snapshot_rows(payload: list[Any]) -> list[dict[str, Any]]:

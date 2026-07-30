@@ -19,6 +19,9 @@ from market_lens.data.eastmoney import (
     merge_csi_index_valuation_points,
     parse_asset_search_row,
     parse_cash_per_share,
+    parse_cnindex_index_identity,
+    parse_cnindex_index_top_holdings,
+    parse_cnindex_related_index_products,
     parse_csi_index_indicator_rows,
     parse_csi_index_pe_ttm_history,
     parse_csi_index_top_holdings,
@@ -47,6 +50,11 @@ from market_lens.data.eastmoney import (
     stock_history_year_chunks,
     supports_csi_official_index_code,
     tencent_stock_symbol,
+)
+from market_lens.data.index_providers import (
+    official_index_constituent_provider,
+    official_index_provider_capabilities,
+    official_index_valuation_provider,
 )
 from market_lens.types import (
     CsiIndexConstituentWeight,
@@ -80,6 +88,164 @@ def test_csi_provider_rejects_known_szse_index_codes_before_request() -> None:
         client.get_csi_index_valuation_history("399006")
     with pytest.raises(ValueError, match="does not cover index 399006"):
         client.get_csi_index_full_weights("399006")
+
+
+def test_official_index_provider_capabilities_are_explicit() -> None:
+    assert official_index_constituent_provider("399006") == "cnindex"
+    assert official_index_valuation_provider("399006") is None
+    assert official_index_constituent_provider("000300") == "csindex"
+    assert official_index_valuation_provider("000300") == "csindex"
+
+    cnindex = official_index_provider_capabilities("399006")
+    assert cnindex.official_identity is True
+    assert cnindex.top_constituent_weights is True
+    assert cnindex.full_constituent_weights is False
+    assert cnindex.valuation_history is False
+
+
+def test_parse_cnindex_identity_and_top_holdings() -> None:
+    identity = parse_cnindex_index_identity(
+        {
+            "code": 200,
+            "data": {
+                "indexcode": "399006",
+                "indexname": "创业板指",
+                "indexfullcname": "创业板指数",
+            },
+        },
+        expected_code="399006",
+        expected_name="创业板指数(价格)",
+    )
+    assert identity == {
+        "index_code": "399006",
+        "index_name": "创业板指数",
+        "source": "cnindex_official",
+    }
+
+    rows = [
+        {
+            "dateStr": "2026-07-29",
+            "seccode": f"300{index:03d}",
+            "secname": f"样本{index}",
+            "weight": str(11 - index),
+        }
+        for index in range(1, 11)
+    ]
+    rows.append(
+        {
+            "dateStr": "2026-07-29",
+            "seccode": "300999",
+            "secname": "未披露权重",
+            "weight": "--",
+        }
+    )
+    holdings = parse_cnindex_index_top_holdings(
+        {"code": 200, "data": {"total": 100, "rows": rows}},
+        expected_code="399006",
+        expected_name=identity["index_name"],
+    )
+
+    assert len(holdings) == 10
+    assert holdings[0].code == "300001"
+    assert holdings[0].weight_pct == 10.0
+    assert holdings[-1].weight_pct == 1.0
+    assert {item.report_date for item in holdings} == {date(2026, 7, 29)}
+
+
+def test_cnindex_parser_rejects_identity_mismatch_and_incomplete_weights() -> None:
+    with pytest.raises(EastmoneyError, match="name mismatch"):
+        parse_cnindex_index_identity(
+            {
+                "code": 200,
+                "data": {
+                    "indexcode": "399006",
+                    "indexfullcname": "深证成份指数",
+                },
+            },
+            expected_code="399006",
+            expected_name="创业板指数",
+        )
+
+    with pytest.raises(EastmoneyError, match="expected 10, got 1"):
+        parse_cnindex_index_top_holdings(
+            {
+                "code": 200,
+                "data": {
+                    "rows": [
+                        {
+                            "dateStr": "2026-07-29",
+                            "seccode": "300750",
+                            "secname": "宁德时代",
+                            "weight": "17.6",
+                        },
+                        {
+                            "dateStr": "2026-07-29",
+                            "seccode": "300308",
+                            "secname": "中际旭创",
+                            "weight": "--",
+                        },
+                    ]
+                },
+            },
+            expected_code="399006",
+            expected_name="创业板指数",
+        )
+
+
+def test_parse_cnindex_related_products_validates_index_mapping() -> None:
+    products = parse_cnindex_related_index_products(
+        {
+            "code": 200,
+            "data": {
+                "rows": [
+                    {
+                        "fundCode": "110026",
+                        "fundName": "易方达创业板ETF联接A",
+                        "fundType": "ETF联接",
+                        "fundIndexCode": "399006.SZ",
+                        "dateStr": "2026-06-30 00:00:00",
+                    },
+                    {
+                        "fundCode": "159915",
+                        "fundName": "易方达创业板ETF",
+                        "fundType": "ETF",
+                        "fundIndexCode": "399006.SZ",
+                        "dateStr": "2026-06-30 00:00:00",
+                    },
+                    {
+                        "fundCode": "CNXT",
+                        "fundName": "VanEck ChiNext ETF",
+                        "fundType": "境外基金",
+                        "fundIndexCode": "399006.SZ",
+                        "dateStr": "2026-06-30 00:00:00",
+                    },
+                ]
+            },
+        },
+        expected_index_code="399006",
+    )
+
+    assert products["110026"]["index_code"] == "399006"
+    assert products["159915"]["fund_type"] == "ETF"
+    assert products["159915"]["source_as_of"] == "2026-06-30"
+
+    with pytest.raises(EastmoneyError, match="identity mismatch"):
+        parse_cnindex_related_index_products(
+            {
+                "code": 200,
+                "data": {
+                    "rows": [
+                        {
+                            "fundCode": "159915",
+                            "fundName": "错误映射",
+                            "fundType": "ETF",
+                            "fundIndexCode": "399001.SZ",
+                        }
+                    ]
+                },
+            },
+            expected_index_code="399006",
+        )
 
 
 def test_parse_stock_kline() -> None:
@@ -874,6 +1040,30 @@ def test_fund_holdings_route_skips_csi_for_szse_index(monkeypatch) -> None:
             AssertionError(f"CSI provider must not receive {code}, top_n={top_n}")
         ),
     )
+    official_top10 = [
+        FundHolding(
+            1,
+            "300750",
+            "宁德时代",
+            17.6,
+            None,
+            None,
+            date(2026, 7, 29),
+        )
+    ]
+    monkeypatch.setattr(
+        client,
+        "get_cnindex_index_top_holdings",
+        lambda code, expected_name, top_n, as_of: official_top10,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_cnindex_related_index_products",
+        lambda code: {
+            "110026": {"fund_type": "ETF联接"},
+            "159915": {"fund_type": "ETF"},
+        },
+    )
     monkeypatch.setattr(
         client,
         "get_fund_top10_snapshot",
@@ -892,7 +1082,141 @@ def test_fund_holdings_route_skips_csi_for_szse_index(monkeypatch) -> None:
 
     assert route.scope == "target_etf_full_disclosure"
     assert route.holdings == target_full.holdings
-    assert route.fallback_reasons == ("official_index_provider_not_supported",)
+    assert route.latest_top10 is not None
+    assert route.latest_top10.source == "cnindex_official"
+    assert route.validation == {
+        "official_index_provider": "cnindex",
+        "fund_mapping": "confirmed",
+        "target_etf_mapping": "confirmed",
+        "product_mapping_source_as_of": None,
+        "index_identity": "confirmed",
+    }
+    assert route.fallback_reasons == ("official_index_full_weights_not_published",)
+
+
+def test_fund_holdings_route_uses_cnindex_top10_after_target_etf_failure(
+    monkeypatch,
+) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    tracking = FundTrackingInfo(
+        fund_code="110026",
+        fund_name="易方达创业板ETF联接A",
+        fund_type="指数型-股票",
+        index_code="399006",
+        index_name="创业板指数(价格)",
+        target_etf_code="159915",
+        target_etf_name="创业板ETF易方达",
+    )
+    official_top10 = [
+        FundHolding(
+            rank=index,
+            code=f"300{index:03d}",
+            name=f"样本{index}",
+            weight_pct=float(11 - index),
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2026, 7, 29),
+        )
+        for index in range(1, 11)
+    ]
+    monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+    monkeypatch.setattr(
+        client,
+        "get_cnindex_index_top_holdings",
+        lambda code, expected_name, top_n, as_of: official_top10,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_cnindex_related_index_products",
+        lambda code: {
+            "110026": {"fund_type": "ETF联接"},
+            "159915": {"fund_type": "ETF"},
+        },
+    )
+    monkeypatch.setattr(
+        client,
+        "get_fund_top10_snapshot",
+        lambda code, source, scope: None,
+    )
+    monkeypatch.setattr(
+        client,
+        "get_fund_full_holdings_snapshot",
+        lambda code, as_of, scope: None,
+    )
+
+    route = client.get_fund_holdings_route(
+        "110026",
+        analysis_end=date(2026, 7, 30),
+    )
+
+    assert route.scope == "tracked_index_top10"
+    assert route.source == "cnindex_official"
+    assert route.coverage == pytest.approx(0.55)
+    assert route.holdings == official_top10
+    assert route.fallback_reasons == ("official_index_full_weights_not_published",)
+
+
+def test_fund_holdings_route_rejects_officially_mismatched_target_etf(
+    monkeypatch,
+) -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    tracking = FundTrackingInfo(
+        fund_code="110026",
+        fund_name="易方达创业板ETF联接A",
+        fund_type="指数型-股票",
+        index_code="399006",
+        index_name="创业板指数(价格)",
+        target_etf_code="159999",
+        target_etf_name="错误目标ETF",
+    )
+    official_top10 = [
+        FundHolding(
+            rank=index,
+            code=f"300{index:03d}",
+            name=f"样本{index}",
+            weight_pct=float(11 - index),
+            shares_10k=None,
+            market_value_10k=None,
+            report_date=date(2026, 7, 29),
+        )
+        for index in range(1, 11)
+    ]
+    monkeypatch.setattr(client, "get_fund_tracking_info", lambda code: tracking)
+    monkeypatch.setattr(
+        client,
+        "get_cnindex_related_index_products",
+        lambda code: {
+            "110026": {"fund_type": "ETF联接"},
+            "159915": {"fund_type": "ETF"},
+        },
+    )
+    monkeypatch.setattr(
+        client,
+        "get_cnindex_index_top_holdings",
+        lambda code, expected_name, top_n, as_of: official_top10,
+    )
+
+    def reject_target_lookup(*args, **kwargs):
+        raise AssertionError(f"mismatched target ETF must not be queried: {args}, {kwargs}")
+
+    monkeypatch.setattr(client, "get_fund_top10_snapshot", reject_target_lookup)
+    monkeypatch.setattr(client, "get_fund_full_holdings_snapshot", reject_target_lookup)
+
+    route = client.get_fund_holdings_route(
+        "110026",
+        analysis_end=date(2026, 7, 30),
+    )
+
+    assert route.scope == "tracked_index_top10"
+    assert route.tracking is not None
+    assert route.tracking.target_etf_code is None
+    assert route.validation["fund_mapping"] == "confirmed"
+    assert route.validation["target_etf_mapping"] == "mismatch"
+    assert route.validation["index_identity"] == "confirmed"
+    assert route.fallback_reasons == (
+        "official_index_full_weights_not_published",
+        "target_etf_relationship_official_mismatch",
+    )
 
 
 def test_fund_holdings_route_uses_direct_holdings_for_active_fund(monkeypatch) -> None:
@@ -1002,6 +1326,17 @@ def test_mobile_fund_api_uses_compatible_user_agent() -> None:
 
     headers = client._headers_for_url("https://fundmobapi.eastmoney.com/example")
 
+    assert headers["User-Agent"] == "Mozilla/5.0"
+
+
+def test_cnindex_api_uses_official_site_headers() -> None:
+    client = EastmoneyClient.__new__(EastmoneyClient)
+    client.headers = {"User-Agent": "default"}
+
+    headers = client._headers_for_url("https://www.cnindex.com.cn/index/example")
+
+    assert headers["Accept"] == "application/json,text/plain,*/*"
+    assert headers["Referer"] == "https://www.cnindex.com.cn/"
     assert headers["User-Agent"] == "Mozilla/5.0"
 
 

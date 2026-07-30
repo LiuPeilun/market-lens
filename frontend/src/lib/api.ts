@@ -190,6 +190,7 @@ export interface FundHoldingsRouteInfo {
   unexplained_equity_weight_pct: number | null
   latest_top10: FundHoldingsSnapshotInfo | null
   full_disclosure: FundHoldingsSnapshotInfo | null
+  validation?: Record<string, unknown>
 }
 
 export interface FundHoldingsSnapshotInfo {

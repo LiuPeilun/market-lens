@@ -20,7 +20,13 @@ import httpx
 import xlrd
 
 from market_lens.config import settings
+from market_lens.data.index_providers import (
+    normalize_official_index_code,
+    official_index_constituent_provider,
+    official_index_valuation_provider,
+)
 from market_lens.data.snapshot_validation import (
+    CNINDEX_OFFICIAL_SOURCE,
     EASTMONEY_DATACENTER_SOURCE,
     EASTMONEY_F10_NAV_SOURCE,
     EASTMONEY_PINGZHONGDATA_SOURCE,
@@ -28,17 +34,22 @@ from market_lens.data.snapshot_validation import (
     EXCHANGE_FUND_PRICE_DATASET,
     FUND_NAV_DATASET,
     FUND_NAV_SNAPSHOT_VERSION,
+    INDEX_TOP_HOLDINGS_DATASET,
+    INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION,
     STOCK_HISTORY_DATASET,
     STOCK_HISTORY_SNAPSHOT_VERSION,
     STOCK_VALUATION_DATASET,
     STOCK_VALUATION_SNAPSHOT_VERSION,
     decode_fund_nav_points,
+    decode_index_top_holdings,
     decode_stock_bars,
     decode_stock_valuation_points,
     serialize_fund_nav_point,
+    serialize_index_top_holding,
     serialize_stock_bar,
     serialize_stock_valuation_point,
     validate_fund_nav_snapshot,
+    validate_index_top_holdings_snapshot,
     validate_stock_bar_snapshot,
     validate_stock_valuation_snapshot,
 )
@@ -376,19 +387,21 @@ class EastmoneyClient:
         rows: list[Any],
         serializer: Callable[[Any], dict[str, Any]],
         validator: Callable[[list[Any]], bool],
+        source_date: Callable[[Any], date] | None = None,
     ) -> None:
         if not rows or not validator(rows):
             return
         snapshot_store = getattr(self, "snapshot_store", None)
         if snapshot_store is None:
             return
+        date_for = source_date or (lambda row: row.date)
         snapshot_store.put(
             dataset=dataset,
             identity=identity,
             source=source,
             validator_version=validator_version,
             payload=[serializer(row) for row in rows],
-            source_as_of=max(row.date for row in rows),
+            source_as_of=max(date_for(row) for row in rows),
             row_count=len(rows),
         )
 
@@ -401,11 +414,14 @@ class EastmoneyClient:
         validator_version: str,
         decoder: Callable[[Any], list[Any]],
         validator: Callable[[list[Any]], bool],
+        source_date: Callable[[Any], date] | None = None,
     ) -> list[Any] | None:
         snapshot_store = getattr(self, "snapshot_store", None)
         if snapshot_store is None:
             return None
         decoded_rows: list[Any] = []
+
+        date_for = source_date or (lambda row: row.date)
 
         def validate_payload(payload: Any, source_as_of: date, row_count: int) -> bool:
             try:
@@ -415,7 +431,7 @@ class EastmoneyClient:
             if (
                 len(rows) != row_count
                 or not rows
-                or max(row.date for row in rows) != source_as_of
+                or max(date_for(row) for row in rows) != source_as_of
                 or not validator(rows)
             ):
                 return False
@@ -1246,6 +1262,125 @@ class EastmoneyClient:
         )
         return parse_csi_index_top_holdings(payload)[:top_n]
 
+    def get_cnindex_index_top_holdings(
+        self,
+        index_code: str,
+        *,
+        expected_name: str | None = None,
+        top_n: int = 10,
+        as_of: date | None = None,
+    ) -> list[FundHolding]:
+        normalized_code = require_cnindex_official_index_code(index_code)
+        snapshot_identity = {
+            "index_code": normalized_code,
+            "top_n": top_n,
+        }
+        identity_url = "https://www.cnindex.com.cn/index/selectIndexByCode?" + urlencode(
+            {"codeValue": normalized_code}
+        )
+        sample_url = "https://www.cnindex.com.cn/sample-detail/detail?" + urlencode(
+            {
+                "indexcode": normalized_code,
+                "dateStr": (as_of or date.today()).strftime("%Y-%m"),
+                "pageNum": 1,
+                "rows": max(top_n, 10),
+            }
+        )
+
+        def validator(rows: list[FundHolding]) -> bool:
+            return validate_index_top_holdings_snapshot(
+                rows,
+                expected_count=top_n,
+            )
+
+        try:
+            identity_payload = self._get_validated_json(
+                identity_url,
+                ttl_seconds=24 * 60 * 60,
+                is_success=lambda value: (
+                    str(value.get("code")) == "200"
+                    and isinstance(value.get("data"), dict)
+                ),
+            )
+            identity = parse_cnindex_index_identity(
+                identity_payload,
+                expected_code=normalized_code,
+                expected_name=expected_name,
+            )
+            sample_payload = self._get_validated_json(
+                sample_url,
+                ttl_seconds=6 * 60 * 60,
+                is_success=lambda value: (
+                    str(value.get("code")) == "200"
+                    and isinstance(value.get("data"), dict)
+                ),
+            )
+            holdings = parse_cnindex_index_top_holdings(
+                sample_payload,
+                expected_code=normalized_code,
+                expected_name=str(identity["index_name"]),
+                top_n=top_n,
+            )
+            if not validator(holdings):
+                raise EastmoneyError(
+                    f"Invalid CNIndex top holdings snapshot for {normalized_code}"
+                )
+            self._save_lkg_snapshot(
+                dataset=INDEX_TOP_HOLDINGS_DATASET,
+                identity=snapshot_identity,
+                source=CNINDEX_OFFICIAL_SOURCE,
+                validator_version=INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION,
+                rows=holdings,
+                serializer=serialize_index_top_holding,
+                validator=validator,
+                source_date=lambda row: row.report_date,
+            )
+            return holdings
+        except (EastmoneyError, KeyError, TypeError, ValueError, OverflowError) as exc:
+            self._delete_cached_response(identity_url)
+            self._delete_cached_response(sample_url)
+            snapshot_rows = self._load_lkg_snapshot(
+                dataset=INDEX_TOP_HOLDINGS_DATASET,
+                identity=snapshot_identity,
+                allowed_sources={CNINDEX_OFFICIAL_SOURCE},
+                validator_version=INDEX_TOP_HOLDINGS_SNAPSHOT_VERSION,
+                decoder=decode_index_top_holdings,
+                validator=validator,
+                source_date=lambda row: row.report_date,
+            )
+            if snapshot_rows is not None:
+                return snapshot_rows
+            if isinstance(exc, EastmoneyError):
+                raise
+            raise EastmoneyError(
+                f"Unexpected CNIndex top holdings response for {normalized_code}"
+            ) from exc
+
+    def get_cnindex_related_index_products(
+        self,
+        index_code: str,
+    ) -> dict[str, dict[str, Any]]:
+        normalized_code = require_cnindex_official_index_code(index_code)
+        url = "https://www.cnindex.com.cn/info/fund?" + urlencode(
+            {
+                "indexCode": normalized_code,
+                "pageNum": 1,
+                "rows": 500,
+            }
+        )
+        payload = self._get_validated_json(
+            url,
+            ttl_seconds=24 * 60 * 60,
+            is_success=lambda value: (
+                str(value.get("code")) == "200"
+                and isinstance(value.get("data"), dict)
+            ),
+        )
+        return parse_cnindex_related_index_products(
+            payload,
+            expected_index_code=normalized_code,
+        )
+
     def get_csi_index_valuation_history(
         self,
         index_code: str,
@@ -1386,6 +1521,7 @@ class EastmoneyClient:
         normalized_code = normalize_fund_code(code)
         route_as_of = analysis_end or date.today()
         fallback_reasons: list[str] = []
+        route_validation: dict[str, Any] = {}
         tracking: FundTrackingInfo | None = None
         try:
             tracking = self.get_fund_tracking_info(normalized_code)
@@ -1406,7 +1542,11 @@ class EastmoneyClient:
         if tracking and tracking.index_code:
             official_top10: FundHoldingsSnapshot | None = None
             target_top10: FundHoldingsSnapshot | None = None
-            if supports_csi_official_index_code(tracking.index_code):
+            constituent_provider = official_index_constituent_provider(
+                tracking.index_code
+            )
+            route_validation["official_index_provider"] = constituent_provider
+            if constituent_provider == "csindex":
                 try:
                     weights = self.get_csi_index_full_weights(tracking.index_code)
                 except (ValueError, EastmoneyError) as exc:
@@ -1415,6 +1555,7 @@ class EastmoneyClient:
                     )
                 else:
                     if weights and weights[0].report_date <= route_as_of:
+                        route_validation["index_identity"] = "confirmed"
                         full_snapshot = csi_weights_as_fund_holdings_snapshot(weights)
                         return build_fund_holdings_route_from_snapshot(
                             full_snapshot,
@@ -1422,6 +1563,7 @@ class EastmoneyClient:
                             fallback_reasons=fallback_reasons,
                             latest_top10=build_top10_from_snapshot(full_snapshot),
                             full_disclosure=full_snapshot,
+                            validation=route_validation,
                         )
                     fallback_reasons.append(
                         "official_index_full_weights_unavailable_as_of_analysis"
@@ -1440,14 +1582,87 @@ class EastmoneyClient:
                         and holdings[0].report_date
                         and holdings[0].report_date <= route_as_of
                     ):
+                        route_validation["index_identity"] = "confirmed"
                         official_top10 = build_fund_holdings_snapshot(
                             holdings,
                             source="csindex_official",
                             scope="tracked_index_top10",
                             equity_allocation_pct=100.0,
                         )
-            else:
-                fallback_reasons.append("official_index_provider_not_supported")
+            elif constituent_provider == "cnindex":
+                fallback_reasons.append("official_index_full_weights_not_published")
+                if tracking.target_etf_code:
+                    try:
+                        related_products = self.get_cnindex_related_index_products(
+                            tracking.index_code
+                        )
+                    except (ValueError, EastmoneyError):
+                        fallback_reasons.append(
+                            "official_index_product_validation_unavailable"
+                        )
+                        route_validation["fund_mapping"] = "unavailable"
+                        route_validation["target_etf_mapping"] = "unavailable"
+                    else:
+                        fund_is_confirmed = normalized_code in related_products
+                        target_is_confirmed = (
+                            tracking.target_etf_code in related_products
+                            and related_products[tracking.target_etf_code].get(
+                                "fund_type"
+                            )
+                            == "ETF"
+                        )
+                        route_validation["fund_mapping"] = (
+                            "confirmed" if fund_is_confirmed else "unconfirmed"
+                        )
+                        route_validation["target_etf_mapping"] = (
+                            "confirmed" if target_is_confirmed else "mismatch"
+                        )
+                        confirmed_product = related_products.get(normalized_code)
+                        route_validation["product_mapping_source_as_of"] = (
+                            confirmed_product.get("source_as_of")
+                            if confirmed_product
+                            else None
+                        )
+                        if fund_is_confirmed and not target_is_confirmed:
+                            fallback_reasons.append(
+                                "target_etf_relationship_official_mismatch"
+                            )
+                            tracking = replace(
+                                tracking,
+                                target_etf_code=None,
+                                target_etf_name=None,
+                            )
+                        elif not fund_is_confirmed:
+                            fallback_reasons.append(
+                                "official_index_fund_mapping_unconfirmed"
+                            )
+                try:
+                    holdings = self.get_cnindex_index_top_holdings(
+                        tracking.index_code,
+                        expected_name=tracking.index_name,
+                        top_n=top_n,
+                        as_of=route_as_of,
+                    )
+                except (ValueError, EastmoneyError) as exc:
+                    fallback_reasons.append(f"official_index_top10_unavailable: {exc}")
+                    route_validation["index_identity"] = "unavailable"
+                else:
+                    route_validation["index_identity"] = "confirmed"
+                    if (
+                        holdings
+                        and holdings[0].report_date
+                        and holdings[0].report_date <= route_as_of
+                    ):
+                        official_top10 = build_fund_holdings_snapshot(
+                            holdings,
+                            source="cnindex_official",
+                            scope="tracked_index_top10",
+                            equity_allocation_pct=100.0,
+                        )
+                    elif holdings:
+                        fallback_reasons.append(
+                            "official_index_top10_after_analysis_date"
+                        )
 
             if tracking.target_etf_code:
                 try:
@@ -1478,6 +1693,7 @@ class EastmoneyClient:
                             fallback_reasons=fallback_reasons,
                             latest_top10=target_top10 or official_top10,
                             full_disclosure=target_full,
+                            validation=route_validation,
                         )
 
             if official_top10 is not None:
@@ -1486,6 +1702,7 @@ class EastmoneyClient:
                     tracking=tracking,
                     fallback_reasons=fallback_reasons,
                     latest_top10=official_top10,
+                    validation=route_validation,
                 )
             if target_top10 is not None:
                 return build_fund_holdings_route_from_snapshot(
@@ -1493,6 +1710,7 @@ class EastmoneyClient:
                     tracking=tracking,
                     fallback_reasons=fallback_reasons,
                     latest_top10=target_top10,
+                    validation=route_validation,
                 )
 
             if looks_like_feeder_fund(resolved_name):
@@ -1503,6 +1721,7 @@ class EastmoneyClient:
                     scope="unresolved_index_fund",
                     tracking=tracking,
                     fallback_reasons=fallback_reasons,
+                    validation=route_validation,
                 )
 
         try:
@@ -1529,6 +1748,7 @@ class EastmoneyClient:
                     fallback_reasons=fallback_reasons,
                     latest_top10=direct_top10,
                     full_disclosure=direct_full,
+                    validation=route_validation,
                 )
 
         if direct_top10 is not None:
@@ -1537,6 +1757,7 @@ class EastmoneyClient:
                 tracking=tracking,
                 fallback_reasons=fallback_reasons,
                 latest_top10=direct_top10,
+                validation=route_validation,
             )
         return build_fund_holdings_route(
             [],
@@ -1544,6 +1765,7 @@ class EastmoneyClient:
             scope="fund_holdings_unavailable",
             tracking=tracking,
             fallback_reasons=fallback_reasons,
+            validation=route_validation,
         )
 
     def get_fund_nav(
@@ -2071,6 +2293,10 @@ class EastmoneyClient:
         elif host == "oss-ch.csindex.com.cn":
             headers["Accept"] = "application/vnd.ms-excel,application/octet-stream,*/*;q=0.8"
             headers["Referer"] = "https://www.csindex.com.cn/"
+        elif host == "www.cnindex.com.cn":
+            headers["Accept"] = "application/json,text/plain,*/*"
+            headers["Referer"] = "https://www.cnindex.com.cn/"
+            headers["User-Agent"] = "Mozilla/5.0"
         elif host == "datacenter-web.eastmoney.com":
             headers["Referer"] = "https://data.eastmoney.com/"
         elif host == "emweb.securities.eastmoney.com":
@@ -2132,21 +2358,28 @@ def normalize_fund_code(code: str) -> str:
 
 
 def normalize_csi_index_code(code: str) -> str:
-    normalized = str(code).strip().upper()
-    if not re.fullmatch(r"[A-Z0-9.]+", normalized):
-        raise ValueError(f"Invalid CSI index code: {code!r}")
-    return normalized
+    return normalize_official_index_code(code)
 
 
 def supports_csi_official_index_code(code: str) -> bool:
-    normalized = normalize_csi_index_code(code)
-    return re.fullmatch(r"399\d{3}", normalized) is None
+    return official_index_valuation_provider(code) == "csindex"
 
 
 def require_csi_official_index_code(code: str) -> str:
     normalized = normalize_csi_index_code(code)
     if not supports_csi_official_index_code(normalized):
         raise ValueError(f"CSI official provider does not cover index {normalized}")
+    return normalized
+
+
+def supports_cnindex_official_index_code(code: str) -> bool:
+    return official_index_constituent_provider(code) == "cnindex"
+
+
+def require_cnindex_official_index_code(code: str) -> str:
+    normalized = normalize_official_index_code(code)
+    if not supports_cnindex_official_index_code(normalized):
+        raise ValueError(f"CNIndex official provider does not cover index {normalized}")
     return normalized
 
 
@@ -3377,6 +3610,184 @@ def parse_csi_index_top_holdings(payload: dict[str, Any]) -> list[FundHolding]:
     return sorted(holdings, key=lambda item: item.rank)
 
 
+def parse_cnindex_index_identity(
+    payload: dict[str, Any],
+    *,
+    expected_code: str,
+    expected_name: str | None = None,
+) -> dict[str, str]:
+    if str(payload.get("code")) != "200" or not isinstance(payload.get("data"), dict):
+        message = payload.get("message") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve CNIndex identity: {message}")
+    data = payload["data"]
+    index_code = normalize_official_index_code(data.get("indexcode") or "")
+    if index_code != expected_code:
+        raise EastmoneyError(
+            f"CNIndex identity code mismatch: expected {expected_code}, got {index_code}"
+        )
+    names = [
+        repair_mojibake(data.get(key))
+        for key in ("indexfullcname", "indexname")
+        if data.get(key)
+    ]
+    names = [name for name in names if name]
+    if not names:
+        raise EastmoneyError(f"CNIndex identity has no name for {expected_code}")
+    if expected_name and not any(index_names_equivalent(expected_name, name) for name in names):
+        raise EastmoneyError(
+            f"CNIndex identity name mismatch for {expected_code}: {expected_name!r}"
+        )
+    return {
+        "index_code": index_code,
+        "index_name": names[0],
+        "source": "cnindex_official",
+    }
+
+
+def parse_cnindex_index_top_holdings(
+    payload: dict[str, Any],
+    *,
+    expected_code: str,
+    expected_name: str,
+    top_n: int = 10,
+) -> list[FundHolding]:
+    if str(payload.get("code")) != "200" or not isinstance(payload.get("data"), dict):
+        message = payload.get("message") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve CNIndex constituents: {message}")
+    rows = payload["data"].get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise EastmoneyError(f"CNIndex constituents are empty for {expected_code}")
+
+    holdings: list[FundHolding] = []
+    report_dates: set[date] = set()
+    seen_codes: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise EastmoneyError(f"Invalid CNIndex constituent row for {expected_code}")
+        weight = parse_percent_value(row.get("weight"))
+        if weight is None:
+            continue
+        code = re.sub(r"\D", "", str(row.get("seccode") or ""))
+        name = repair_mojibake(row.get("secname"))
+        report_date = parse_optional_date(row.get("dateStr"))
+        if len(code) != 6 or not name or report_date is None:
+            raise EastmoneyError(
+                f"Invalid CNIndex constituent identity for {expected_code}"
+            )
+        if code in seen_codes:
+            raise EastmoneyError(
+                f"Duplicate CNIndex constituent {code} for {expected_code}"
+            )
+        if not isfinite(weight) or weight <= 0 or weight > 100:
+            raise EastmoneyError(
+                f"Invalid CNIndex constituent weight for {expected_code}: {weight}"
+            )
+        seen_codes.add(code)
+        report_dates.add(report_date)
+        holdings.append(
+            FundHolding(
+                rank=len(holdings) + 1,
+                code=code,
+                name=name,
+                weight_pct=weight,
+                shares_10k=None,
+                market_value_10k=None,
+                report_date=report_date,
+            )
+        )
+        if len(holdings) == top_n:
+            break
+
+    if len(holdings) != top_n:
+        raise EastmoneyError(
+            f"CNIndex top constituents incomplete for {expected_code}: "
+            f"expected {top_n}, got {len(holdings)}"
+        )
+    if len(report_dates) != 1:
+        raise EastmoneyError(
+            f"CNIndex constituents mix report dates for {expected_code}"
+        )
+    weights = [item.weight_pct or 0.0 for item in holdings]
+    if weights != sorted(weights, reverse=True):
+        raise EastmoneyError(
+            f"CNIndex constituent weights are not descending for {expected_code}"
+        )
+    if sum(weights) > 102.0:
+        raise EastmoneyError(
+            f"CNIndex top constituent weights exceed 100% for {expected_code}"
+        )
+    if not expected_name:
+        raise EastmoneyError(f"CNIndex constituent identity is incomplete for {expected_code}")
+    return holdings
+
+
+def parse_cnindex_related_index_products(
+    payload: dict[str, Any],
+    *,
+    expected_index_code: str,
+) -> dict[str, dict[str, Any]]:
+    if str(payload.get("code")) != "200" or not isinstance(payload.get("data"), dict):
+        message = payload.get("message") or "unexpected response"
+        raise EastmoneyError(f"Failed to resolve CNIndex related products: {message}")
+    rows = payload["data"].get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise EastmoneyError(
+            f"CNIndex related products are empty for {expected_index_code}"
+        )
+
+    products: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise EastmoneyError(
+                f"Invalid CNIndex related product row for {expected_index_code}"
+            )
+        fund_name = repair_mojibake(row.get("fundName"))
+        fund_type = repair_mojibake(row.get("fundType"))
+        raw_fund_code = str(row.get("fundCode") or "").strip()
+        fund_code = re.sub(r"\D", "", raw_fund_code)
+        index_code = str(row.get("fundIndexCode") or "").split(".", 1)[0].strip()
+        if fund_type == "境外基金" and not re.fullmatch(r"\d{6}", raw_fund_code):
+            continue
+        if (
+            len(fund_code) != 6
+            or index_code != expected_index_code
+            or not fund_name
+            or not fund_type
+        ):
+            raise EastmoneyError(
+                f"CNIndex related product identity mismatch for {expected_index_code}"
+            )
+        product = {
+            "fund_code": fund_code,
+            "fund_name": fund_name,
+            "fund_type": fund_type,
+            "index_code": index_code,
+            "source_as_of": str(row.get("dateStr") or "")[:10] or None,
+            "source": "cnindex_official",
+        }
+        existing = products.get(fund_code)
+        if existing is not None and existing != product:
+            raise EastmoneyError(
+                f"Conflicting CNIndex related product {fund_code}"
+            )
+        products[fund_code] = product
+    return products
+
+
+def index_names_equivalent(expected: str, actual: str) -> bool:
+    def normalize(value: str) -> str:
+        normalized = repair_mojibake(value)
+        normalized = re.sub(
+            r"[（(]\s*(?:价格|PRICE)\s*[)）]\s*$",
+            "",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        return re.sub(r"\s+", "", normalized)
+
+    return normalize(expected) == normalize(actual)
+
+
 def parse_csi_index_pe_ttm_history(
     payload: dict[str, Any],
     *,
@@ -3737,6 +4148,7 @@ def build_fund_holdings_route(
     scope: str,
     tracking: FundTrackingInfo | None,
     fallback_reasons: list[str],
+    validation: dict[str, Any] | None = None,
 ) -> FundHoldingsRoute:
     report_date = next((item.report_date for item in holdings if item.report_date), None)
     coverage = min(sum(item.weight_pct or 0.0 for item in holdings) / 100.0, 1.0)
@@ -3748,6 +4160,7 @@ def build_fund_holdings_route(
         coverage=round(coverage, 4),
         tracking=tracking,
         fallback_reasons=tuple(fallback_reasons),
+        validation=dict(validation or {}),
     )
 
 
@@ -3758,6 +4171,7 @@ def build_fund_holdings_route_from_snapshot(
     fallback_reasons: list[str],
     latest_top10: FundHoldingsSnapshot | None = None,
     full_disclosure: FundHoldingsSnapshot | None = None,
+    validation: dict[str, Any] | None = None,
 ) -> FundHoldingsRoute:
     return FundHoldingsRoute(
         holdings=snapshot.holdings,
@@ -3776,6 +4190,7 @@ def build_fund_holdings_route_from_snapshot(
         unexplained_equity_weight_pct=snapshot.unexplained_equity_weight_pct,
         latest_top10=latest_top10,
         full_disclosure=full_disclosure,
+        validation=dict(validation or {}),
     )
 
 

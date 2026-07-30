@@ -868,10 +868,14 @@ class MarketAnalysisAgent:
                 product_profile=product_profile,
                 retrieved_at=retrieved_at,
             )
-            consume_lkg_events(self.data_client)
+            holdings_lkg_events = consume_lkg_events(self.data_client)
             attach_fallback_traces(result, fund_trace, index_trace)
             append_stage_timeout_reasons(result, fund_trace, index_trace)
-            apply_last_known_good_diagnostics(result, critical_lkg_events)
+            apply_last_known_good_diagnostics(
+                result,
+                [*critical_lkg_events, *holdings_lkg_events],
+                affects_valuation_method=bool(critical_lkg_events),
+            )
             return result
         raise InvalidRequestError(
             "unsupported_asset_type",
@@ -1688,6 +1692,8 @@ def build_terminal_market_result(
 def apply_last_known_good_diagnostics(
     result: dict[str, Any],
     events: list[dict[str, Any]],
+    *,
+    affects_valuation_method: bool = True,
 ) -> None:
     if not events:
         return
@@ -1699,7 +1705,7 @@ def apply_last_known_good_diagnostics(
     }
     notes = result.setdefault("notes", [])
     note = (
-        "One or more critical market datasets use validated last-known-good snapshots; "
+        "One or more market datasets use validated last-known-good snapshots; "
         "see assessment.data_quality for source dates and snapshot ages."
     )
     if note not in notes:
@@ -1742,7 +1748,8 @@ def apply_last_known_good_diagnostics(
     score = valuation.get("score")
     if isinstance(score, int | float) and not isinstance(score, bool) and isfinite(score):
         assessment["status"] = "degraded"
-        assessment["method"] = "last_known_good"
+        if affects_valuation_method:
+            assessment["method"] = "last_known_good"
 
 
 def preserve_fund_valuation_context(
@@ -1832,6 +1839,7 @@ def serialize_holdings_route(
             "unexplained_equity_weight_pct": None,
             "latest_top10": None,
             "full_disclosure": None,
+            "validation": {},
         }
     tracking = route.tracking
     return {
@@ -1850,6 +1858,7 @@ def serialize_holdings_route(
         "unexplained_equity_weight_pct": route.unexplained_equity_weight_pct,
         "latest_top10": serialize_holdings_snapshot(route.latest_top10),
         "full_disclosure": serialize_holdings_snapshot(route.full_disclosure),
+        "validation": dict(route.validation),
     }
 
 
